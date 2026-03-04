@@ -4,7 +4,7 @@
 ### Tech Stack plan
 #### Backend  
 - next.js
-- SQLBase
+- SupaBase
 #### Frontend
 - React 
 - plotly for graphs
