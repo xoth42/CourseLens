@@ -3,8 +3,8 @@
 
 ### Tech Stack plan
 #### Backend  
-- Django with Python
-- PostGres or SQLite? - probably SQLite
+- next.js
+- SQLBase
 #### Frontend
 - React 
 - plotly for graphs
