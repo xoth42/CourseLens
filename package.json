@@ -1,0 +1,10 @@
+{
+  "homepage": "https://xoth42.github.io/CourseLens",
+"devDependencies": {
+    "gh-pages": "^6.3.0"
+  },
+  "scripts":{
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d build" 
+}
+}
