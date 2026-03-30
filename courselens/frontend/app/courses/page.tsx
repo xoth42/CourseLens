@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import Link from "next/link";
 
 type Course = {
   id: number;
