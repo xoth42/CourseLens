@@ -2,6 +2,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 // TypeScript: define what a "Course" looks like so we don't make mistakes
 type Course = {
@@ -102,6 +103,7 @@ export default function CoursesPage() {
 // A small reusable component for one course card
 function CourseCard({ course }: { course: Course }) {
   return (
+    <Link href={`/courses/${course.id}`}>
     <div className="bg-white border border-gray-200 rounded-xl p-5 hover:shadow-md transition-shadow cursor-pointer">
       <div className="flex justify-between items-start">
         <div>
@@ -127,5 +129,6 @@ function CourseCard({ course }: { course: Course }) {
         <span>{course.department}</span>
       </div>
     </div>
+    </Link>
   );
 }
