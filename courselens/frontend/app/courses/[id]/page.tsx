@@ -55,16 +55,7 @@ export default function CourseDetailPage() {
                 {course.code}
               </span>
               <h2 className="text-2xl font-bold text-gray-900 mt-2">{course.name}</h2>
-              <p className="text-gray-500">
-                <Link
-                  href={`/professors/${encodeURIComponent(course.professor)}`}
-                  className="text-blue-600 hover:underline"
-                >
-                  {course.professor}
-                </Link>
-                {" · "}
-                {course.department}
-              </p>
+              <p className="text-gray-500">{course.professor} · {course.department}</p>
             </div>
             <div className="text-right">
               <div className="text-4xl font-bold text-blue-600">{course.rating.toFixed(1)}</div>
