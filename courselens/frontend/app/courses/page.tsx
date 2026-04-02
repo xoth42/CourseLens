@@ -1,39 +1,32 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-
-type Course = {
-  id: number;
-  code: string;
-  name: string;
-  professor: string;
-  rating: number;
-  difficulty: number;
-  reviews: number;
-  department: string;
-};
-
-const MOCK_COURSES: Course[] = [
-  { id: 1, code: "CS 320",   name: "Software Engineering",       professor: "Dr. Lehr",       rating: 4.1, difficulty: 3.2, reviews: 45, department: "Computer Science" },
-  { id: 2, code: "CS 311",   name: "Algorithms",                 professor: "Dr. Barrington", rating: 3.8, difficulty: 4.5, reviews: 62, department: "Computer Science" },
-  { id: 3, code: "CS 230",   name: "Computer Systems",           professor: "Dr. Croft",      rating: 4.3, difficulty: 4.0, reviews: 38, department: "Computer Science" },
-  { id: 4, code: "MATH 235", name: "Linear Algebra",             professor: "Dr. Havens",     rating: 4.0, difficulty: 3.8, reviews: 55, department: "Mathematics" },
-  { id: 5, code: "CS 326",   name: "Web Programming",            professor: "Dr. Richards",   rating: 4.5, difficulty: 2.8, reviews: 71, department: "Computer Science" },
-  { id: 6, code: "MATH 331", name: "Ordinary Differential Eqs.", professor: "Dr. Pedit",      rating: 3.6, difficulty: 4.2, reviews: 29, department: "Mathematics" },
-];
+import { useState, useEffect } from "react";
+import { supabase } from "../../lib/supabase/client";
+import type { Course } from "../../types/course";
 
 export default function CoursesPage() {
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [department, setDepartment] = useState("All");
   const [professor, setProfessor] = useState("All");
   const [filterType, setFilterType] = useState<"department" | "professor">("department");
   const [showFilterMenu, setShowFilterMenu] = useState(false);
 
-  const departments = ["All", ...new Set(MOCK_COURSES.map((c) => c.department))];
-  const professors = ["All", ...new Set(MOCK_COURSES.map((c) => c.professor))];
+  useEffect(() => {
+    async function fetchCourses() {
+      const { data, error } = await supabase.from("courses").select("*");
+      if (!error && data) setCourses(data);
+      setLoading(false);
+    }
+    fetchCourses();
+  }, []);
 
-  const filteredCourses = MOCK_COURSES.filter((course) => {
+  const departments = ["All", ...new Set(courses.map((c) => c.department))];
+  const professors = ["All", ...new Set(courses.map((c) => c.professor))];
+
+  const filteredCourses = courses.filter((course) => {
     const matchesSearch =
       course.name.toLowerCase().includes(search.toLowerCase()) ||
       course.code.toLowerCase().includes(search.toLowerCase()) ||
@@ -119,11 +112,13 @@ export default function CoursesPage() {
         </div>
 
         <p className="text-sm text-gray-400 mb-4">
-          {filteredCourses.length} course{filteredCourses.length !== 1 ? "s" : ""} found
+          {loading ? "Loading..." : `${filteredCourses.length} course${filteredCourses.length !== 1 ? "s" : ""} found`}
         </p>
 
         <div className="flex flex-col gap-4">
-          {filteredCourses.length === 0 ? (
+          {loading ? (
+            <p className="text-center text-gray-400 py-16">Loading courses...</p>
+          ) : filteredCourses.length === 0 ? (
             <p className="text-center text-gray-400 py-16">No courses match your search.</p>
           ) : (
             filteredCourses.map((course) => (
@@ -139,15 +134,19 @@ export default function CoursesPage() {
 function CourseCard({ course }: { course: Course }) {
   return (
     <Link href={`/courses/${course.id}`}>
-    <div className="bg-white border border-gray-200 rounded-xl p-5 hover:shadow-md transition-shadow cursor-pointer">
-      <div className="flex justify-between items-start">
-        <div>
-          {/* Blue badge for the course code */}
-          <span className="text-xs font-semibold bg-blue-100 text-blue-700 px-2 py-1 rounded-full">
-            {course.code}
-          </span>
-          <h3 className="text-lg font-semibold text-gray-900 mt-2">{course.name}</h3>
-          <p className="text-sm text-gray-500">{course.professor}</p>
+      <div className="bg-white border border-gray-200 rounded-xl p-5 hover:shadow-md transition-shadow cursor-pointer">
+        <div className="flex justify-between items-start">
+          <div>
+            <span className="text-xs font-semibold bg-blue-100 text-blue-700 px-2 py-1 rounded-full">
+              {course.code}
+            </span>
+            <h3 className="text-lg font-semibold text-gray-900 mt-2">{course.name}</h3>
+            <p className="text-sm text-gray-500">{course.professor}</p>
+          </div>
+          <div className="text-right">
+            <div className="text-2xl font-bold text-blue-600">{course.rating.toFixed(1)}</div>
+            <div className="text-xs text-gray-400">/ 5.0</div>
+          </div>
         </div>
         <div className="flex gap-6 mt-4 text-sm text-gray-500">
           <span>Difficulty: <strong>{course.difficulty.toFixed(1)}/5</strong></span>
@@ -155,14 +154,6 @@ function CourseCard({ course }: { course: Course }) {
           <span>{course.department}</span>
         </div>
       </div>
-
-      {/* Bottom stats */}
-      <div className="flex gap-6 mt-4 text-sm text-gray-500">
-        <span>Difficulty: <strong>{course.difficulty.toFixed(1)}/5</strong></span>
-        <span>{course.reviews} reviews</span>
-        <span>{course.department}</span>
-      </div>
-    </div>
     </Link>
   );
 }

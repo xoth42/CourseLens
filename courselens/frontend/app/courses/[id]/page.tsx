@@ -2,31 +2,35 @@
 
 import { useParams } from "next/navigation";
 import Link from "next/link";
-
-type Course = {
-  id: number;
-  code: string;
-  name: string;
-  professor: string;
-  rating: number;
-  difficulty: number;
-  reviews: number;
-  department: string;
-  description: string;
-};
-
-const MOCK_COURSES: Course[] = [
-  { id: 1, code: "CS 320", name: "Software Engineering", professor: "Dr. Lehr", rating: 4.1, difficulty: 3.2, reviews: 45, department: "Computer Science", description: "Introduction to software engineering principles including design, testing, and project management." },
-  { id: 2, code: "CS 311", name: "Algorithms", professor: "Dr. Barrington", rating: 3.8, difficulty: 4.5, reviews: 62, department: "Computer Science", description: "Study of algorithm design and analysis including sorting, graphs, and dynamic programming." },
-  { id: 3, code: "CS 230", name: "Computer Systems", professor: "Dr. Croft", rating: 4.3, difficulty: 4.0, reviews: 38, department: "Computer Science", description: "Introduction to computer systems, assembly language, and memory management." },
-  { id: 4, code: "MATH 235", name: "Linear Algebra", professor: "Dr. Havens", rating: 4.0, difficulty: 3.8, reviews: 55, department: "Mathematics", description: "Vectors, matrices, linear transformations, and their applications." },
-  { id: 5, code: "CS 326", name: "Web Programming", professor: "Dr. Richards", rating: 4.5, difficulty: 2.8, reviews: 71, department: "Computer Science", description: "Full stack web development including HTML, CSS, JavaScript, and databases." },
-  { id: 6, code: "MATH 331", name: "Ordinary Differential Eqs.", professor: "Dr. Pedit", rating: 3.6, difficulty: 4.2, reviews: 29, department: "Mathematics", description: "First and second order differential equations and their applications." },
-];
+import { useState, useEffect } from "react";
+import { supabase } from "../../../lib/supabase/client";
+import type { Course } from "../../../types/course";
 
 export default function CourseDetailPage() {
   const { id } = useParams();
-  const course = MOCK_COURSES.find((c) => c.id === Number(id));
+  const [course, setCourse] = useState<Course | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchCourse() {
+      const { data, error } = await supabase
+        .from("courses")
+        .select("*")
+        .eq("id", Number(id))
+        .single();
+      if (!error && data) setCourse(data);
+      setLoading(false);
+    }
+    fetchCourse();
+  }, [id]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-gray-500">Loading...</p>
+      </div>
+    );
+  }
 
   if (!course) {
     return (
