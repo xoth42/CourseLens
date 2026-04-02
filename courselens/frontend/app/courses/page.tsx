@@ -1,9 +1,27 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useEffect } from "react";
-import { supabase } from "../../lib/supabase/client";
-import type { Course } from "../../types/course";
+import { useState } from "react";
+
+type Course = {
+  id: number;
+  code: string;
+  name: string;
+  professor: string;
+  rating: number;
+  difficulty: number;
+  reviews: number;
+  department: string;
+};
+
+const MOCK_COURSES: Course[] = [
+  { id: 1, code: "CS 320",   name: "Software Engineering",       professor: "Dr. Lehr",       rating: 4.1, difficulty: 3.2, reviews: 45, department: "Computer Science" },
+  { id: 2, code: "CS 311",   name: "Algorithms",                 professor: "Dr. Barrington", rating: 3.8, difficulty: 4.5, reviews: 62, department: "Computer Science" },
+  { id: 3, code: "CS 230",   name: "Computer Systems",           professor: "Dr. Croft",      rating: 4.3, difficulty: 4.0, reviews: 38, department: "Computer Science" },
+  { id: 4, code: "MATH 235", name: "Linear Algebra",             professor: "Dr. Havens",     rating: 4.0, difficulty: 3.8, reviews: 55, department: "Mathematics" },
+  { id: 5, code: "CS 326",   name: "Web Programming",            professor: "Dr. Richards",   rating: 4.5, difficulty: 2.8, reviews: 71, department: "Computer Science" },
+  { id: 6, code: "MATH 331", name: "Ordinary Differential Eqs.", professor: "Dr. Pedit",      rating: 3.6, difficulty: 4.2, reviews: 29, department: "Mathematics" },
+];
 
 export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([]);
