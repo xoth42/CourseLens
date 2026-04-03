@@ -57,32 +57,56 @@ def sync_status_from_supabase(sb: Client):
     courses_count = sb.table("classes").select("id", count="exact").execute().count
     professors_count = sb.table("professor").select("id", count="exact").execute().count
 
-    # professor_classes grouped by semester
-    pc_rows = sb.table("professor_classes").select("semester").execute().data
-    semester_counts: dict[str, int] = {}
+    # Pull all professor_classes rows to compute per-term stats
+    pc_rows = sb.table("professor_classes").select("semester, class_id, prof_id").execute().data
+
+    # Aggregate per semester
+    by_term: dict[str, dict] = {}
     for row in pc_rows:
         sem = row["semester"]
-        semester_counts[sem] = semester_counts.get(sem, 0) + 1
+        if sem not in by_term:
+            by_term[sem] = {"class_ids": set(), "prof_ids": set(), "links": 0}
+        by_term[sem]["class_ids"].add(row["class_id"])
+        by_term[sem]["prof_ids"].add(row["prof_id"])
+        by_term[sem]["links"] += 1
 
     pushed_terms = {
-        sem: {"pushed_at": "pre-status-tracking", "professor_classes": count}
-        for sem, count in semester_counts.items()
+        sem: {
+            "pushed_at": "pre-status-tracking",
+            "professor_classes": d["links"],
+            "unique_courses_linked": len(d["class_ids"]),
+            "unique_professors_linked": len(d["prof_ids"]),
+        }
+        for sem, d in by_term.items()
     }
+
+    # Global coverage stats
+    all_linked_courses = {row["class_id"] for row in pc_rows}
+    all_linked_profs = {row["prof_id"] for row in pc_rows}
 
     status = {
         "pushed_terms": pushed_terms,
         "total_courses_in_db": courses_count,
         "total_professors_in_db": professors_count,
+        "courses_with_any_professor": len(all_linked_courses),
+        "courses_staff_only": courses_count - len(all_linked_courses),
+        "professors_with_any_link": len(all_linked_profs),
         "last_synced": str(date.today()),
     }
 
     save_push_status(status)
 
-    print(f"  {courses_count} courses in DB")
-    print(f"  {professors_count} professors in DB")
-    print(f"  {len(pushed_terms)} terms with professor_classes:")
-    for sem, count in sorted(semester_counts.items()):
-        print(f"    {sem}: {count} links")
+    print(f"  {courses_count} courses in DB "
+          f"({len(all_linked_courses)} have a professor link, "
+          f"{courses_count - len(all_linked_courses)} are staff-only)")
+    print(f"  {professors_count} professors in DB "
+          f"({len(all_linked_profs)} have at least one link)")
+    print(f"  {len(pushed_terms)} terms:")
+    for sem in sorted(pushed_terms):
+        d = pushed_terms[sem]
+        print(f"    {sem}: {d['professor_classes']} links | "
+              f"{d['unique_courses_linked']} courses | "
+              f"{d['unique_professors_linked']} professors")
     print(f"\nWrote {PUSH_STATUS_FILE}")
 
 
@@ -250,12 +274,24 @@ def push_professor_classes(
 
     print(f"  Done. {len(unique_rows)} professor_classes rows upserted.     ")
 
-    # Count per semester for status file
-    semester_counts: dict[str, int] = {}
+    # Build per-term stats for status file
+    by_term: dict[str, dict] = {}
     for r in unique_rows:
         sem = r["semester"]
-        semester_counts[sem] = semester_counts.get(sem, 0) + 1
-    return semester_counts
+        if sem not in by_term:
+            by_term[sem] = {"class_ids": set(), "prof_ids": set(), "links": 0}
+        by_term[sem]["class_ids"].add(r["class_id"])
+        by_term[sem]["prof_ids"].add(r["prof_id"])
+        by_term[sem]["links"] += 1
+
+    return {
+        sem: {
+            "professor_classes": d["links"],
+            "unique_courses_linked": len(d["class_ids"]),
+            "unique_professors_linked": len(d["prof_ids"]),
+        }
+        for sem, d in by_term.items()
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -315,16 +351,20 @@ def main(dry_run: bool, simple_run: bool, force_push: bool):
 
     # Update push_status.json (skip for dry-run and simple-run)
     if not dry_run and not simple_run and semester_counts:
-        for sem, count in semester_counts.items():
+        for sem, stats in semester_counts.items():
             status["pushed_terms"][sem] = {
                 "pushed_at": str(date.today()),
-                "professor_classes": count,
+                **stats,
             }
-        # Refresh totals
+        # Refresh global totals from DB
         total_courses = sb.table("classes").select("id", count="exact").execute().count
         total_professors = sb.table("professor").select("id", count="exact").execute().count
+        pc_rows = sb.table("professor_classes").select("class_id, prof_id").execute().data
         status["total_courses_in_db"] = total_courses
         status["total_professors_in_db"] = total_professors
+        status["courses_with_any_professor"] = len({r["class_id"] for r in pc_rows})
+        status["courses_staff_only"] = total_courses - status["courses_with_any_professor"]
+        status["professors_with_any_link"] = len({r["prof_id"] for r in pc_rows})
         status["last_synced"] = str(date.today())
         save_push_status(status)
         print(f"\nUpdated push_status.json — {len(status['pushed_terms'])} total terms pushed.")
