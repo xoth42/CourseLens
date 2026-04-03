@@ -1,10 +1,24 @@
-# Migration SQL — run this in Supabase SQL editor to replace the broken schema
+# ============================================================
+# FRESH INSTALL — run this block if starting from scratch
+# (drops everything and recreates clean)
+# ============================================================
 
-DROP TABLE IF EXISTS public.metrics CASCADE;
-DROP TABLE IF EXISTS public.prerequisites CASCADE;
-DROP TABLE IF EXISTS public.professor CASCADE;
+DROP TABLE IF EXISTS public.evaluation_flags CASCADE;
 DROP TABLE IF EXISTS public.evaluations CASCADE;
+DROP TABLE IF EXISTS public.prerequisites CASCADE;
+DROP TABLE IF EXISTS public.professor_classes CASCADE;
+DROP TABLE IF EXISTS public.professor CASCADE;
 DROP TABLE IF EXISTS public.classes CASCADE;
+DROP TABLE IF EXISTS public.metrics CASCADE;
+DROP TABLE IF EXISTS public.students CASCADE;
+
+-- NOTE: if using Supabase Auth, replace this with a profile table linked
+-- to auth.users by UUID and remove the password column.
+CREATE TABLE public.students (
+  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  email varchar NOT NULL UNIQUE,
+  password varchar NOT NULL  -- store bcrypt/argon2 hash only, never plaintext
+);
 
 CREATE TABLE public.classes (
   id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
