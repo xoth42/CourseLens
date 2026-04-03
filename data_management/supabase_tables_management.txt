@@ -1,23 +1,42 @@
 # CourseLens — Supabase Table Management Commands
+# Use these in the Supabase SQL editor when you need to clear or reset data.
 
-## Remove All Elements From Each Table
+---
 
--- Order matters: delete from child tables first to respect foreign key constraints.
+## Clear All Data (keep tables, delete rows only)
+-- Order matters: child tables first to respect foreign key constraints.
+-- Identity sequences (id columns) are NOT reset — ids continue incrementing.
 
--- 1. evaluation_flags (depends on evaluations)
 DELETE FROM public.evaluation_flags;
-
--- 2. evaluations (depends on classes, students, professor)
 DELETE FROM public.evaluations;
-
--- 3. professor_classes (depends on professor, classes)
 DELETE FROM public.professor_classes;
-
--- 4. prerequisites (depends on classes)
 DELETE FROM public.prerequisites;
-
--- 5. professor
 DELETE FROM public.professor;
+DELETE FROM public.classes;
+DELETE FROM public.students;
 
--- 6. classes
+---
+
+## Clear All Data AND Reset ID Sequences
+-- TRUNCATE is faster than DELETE and resets GENERATED ALWAYS AS IDENTITY counters
+-- so the next inserted row gets id = 1 again. CASCADE handles FK order automatically.
+
+TRUNCATE
+  public.evaluation_flags,
+  public.evaluations,
+  public.professor_classes,
+  public.prerequisites,
+  public.professor,
+  public.classes,
+  public.students
+RESTART IDENTITY CASCADE;
+
+---
+
+## Clear Scraped Data Only (keep students and evaluations)
+-- Use this to re-seed courses/professors from a fresh scrape without losing user data.
+
+DELETE FROM public.professor_classes;
+DELETE FROM public.prerequisites;
+DELETE FROM public.professor;
 DELETE FROM public.classes;

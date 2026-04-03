@@ -35,17 +35,23 @@ Session / resume behavior:
     - Use --force to re-scrape terms already marked complete
 
 Push to Supabase (after scraping):
-    cp .env.example .env                           # fill in SUPABASE_URL and SUPABASE_KEY
+    cp .env.example .env                               # fill in SUPABASE_URL and SUPABASE_KEY
     pip install -r requirements.txt
+    python push_to_supabase.py --sync-status           # query DB, write push_status.json
     python push_to_supabase.py --simple-run --dry-run  # preview one row of each type
     python push_to_supabase.py --simple-run            # write one row each, verify in Supabase
     python push_to_supabase.py --dry-run               # preview full push
-    python push_to_supabase.py                         # full live push
+    python push_to_supabase.py                         # push all terms not in push_status.json
+    python push_to_supabase.py --force-push            # re-push terms already in push_status.json
 
 Push phases:
-    1. classes          — upserts on course_number; classavg/difficulty_avg NULL, review_count 0
-    2. professor        — upserts on name
-    3. professor_classes — links prof_id + class_id + semester
+    1. classes           — upserts on course_number; classavg/difficulty_avg NULL, review_count 0
+    2. professor         — upserts on name
+    3. professor_classes — links prof_id + class_id + semester (filtered to new terms only)
+
+Push status file:
+    out/push_status.json — tracks which terms are in Supabase with counts and push date
+    Run --sync-status first to populate it from the live DB before pushing new terms
 
 Notes:
     - A browser window will open — this is normal, SPIRE requires a real browser session

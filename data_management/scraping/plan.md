@@ -14,8 +14,10 @@ scraper is working.
 
 ## Current State
 
-Scraper is operational. Winter 2026 and Spring 2026 are complete and pushed to Supabase.
-Multi-term runs with session resume are working. Active run: --years 4 (Fall 2026 in progress).
+Scraper is operational. Multi-term runs with session resume are working.
+
+To see what has been scraped:       cat out/session.json
+To see what has been pushed to DB:  cat out/push_status.json  (or run --sync-status to refresh from live DB)
 
 ---
 

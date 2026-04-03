@@ -1,12 +1,30 @@
 """
-scraper.py — dirty single-file SPIRE scraper
-Writes JSON Lines to out/courses.json and out/sections.json.
+scraper.py — Selenium-based SPIRE class search scraper.
+
+Navigates UMass SPIRE via a real Chrome session, iterates every subject for
+the requested term(s), and writes results as JSON Lines to out/.
+
+Output files:
+    out/courses.json   — one unique course per line: {course_number, subject, number, name}
+    out/sections.json  — one term entry per line:    {course_number, semester, instructors:[...]}
+    out/session.json   — scrape progress tracker; enables resume after interruption
 
 Usage:
     pip install -r requirements.txt
-    python scraper.py                        # scrapes most recent term
-    python scraper.py --term "Spring 2025"   # scrapes a specific term
-    python scraper.py --subject COMPSCI      # one subject only (for testing)
+    python scraper.py                               # most recent term, all subjects
+    python scraper.py --term "Spring 2025"          # specific term, all subjects
+    python scraper.py --subject COMPSCI             # one subject only (good for testing)
+    python scraper.py --years 4                     # all terms from the last 4 years
+    python scraper.py --all-terms                   # every term in the SPIRE dropdown
+    python scraper.py --force                       # ignore session, re-scrape everything
+
+Resume / Ctrl-C:
+    Progress is saved after every subject. If interrupted, re-run the same command to resume.
+    Ctrl-C finishes the current subject, saves, then exits. Ctrl-C twice force-quits.
+    To manually mark terms as done: edit out/session.json directly (see USAGE.txt).
+
+A browser window will open — SPIRE requires a real session and cannot be scraped headlessly
+without risk of detection. This is expected behavior.
 """
 
 import argparse

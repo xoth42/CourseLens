@@ -3,18 +3,22 @@ push_to_supabase.py — load scraped JSON into Supabase
 
 Reads out/courses.json and out/sections.json produced by scraper.py and
 upserts them into the classes, professor, and professor_classes tables.
+Tracks what has been pushed in out/push_status.json.
 
 Usage:
-    cp .env.example .env        # fill in SUPABASE_URL and SUPABASE_KEY
-    pip install -r requirements.txt
-    python push_to_supabase.py
-    python push_to_supabase.py --dry-run   # print what would be inserted, no writes
+    cp .env.example .env
+    python push_to_supabase.py --sync-status          # query Supabase, write push_status.json
+    python push_to_supabase.py --dry-run              # preview what would be pushed
+    python push_to_supabase.py --simple-run           # push one row each to verify schema
+    python push_to_supabase.py                        # push all unpushed terms
+    python push_to_supabase.py --force-push           # re-push terms already in push_status
 """
 
 import argparse
 import json
 import os
 import sys
+from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -25,8 +29,61 @@ load_dotenv()
 OUT_DIR = Path(__file__).parent / "out"
 COURSES_FILE = OUT_DIR / "courses.json"
 SECTIONS_FILE = OUT_DIR / "sections.json"
+PUSH_STATUS_FILE = OUT_DIR / "push_status.json"
 
-BATCH_SIZE = 100  # rows per upsert call
+BATCH_SIZE = 100
+
+
+# ---------------------------------------------------------------------------
+# Push status — tracks what terms have been pushed to Supabase
+# ---------------------------------------------------------------------------
+
+def load_push_status() -> dict:
+    if not PUSH_STATUS_FILE.exists():
+        return {"pushed_terms": {}}
+    with open(PUSH_STATUS_FILE) as f:
+        return json.load(f)
+
+
+def save_push_status(status: dict):
+    with open(PUSH_STATUS_FILE, "w") as f:
+        json.dump(status, f, indent=2)
+
+
+def sync_status_from_supabase(sb: Client):
+    """Query Supabase for current state and write push_status.json."""
+    print("Querying Supabase for current state...")
+
+    courses_count = sb.table("classes").select("id", count="exact").execute().count
+    professors_count = sb.table("professor").select("id", count="exact").execute().count
+
+    # professor_classes grouped by semester
+    pc_rows = sb.table("professor_classes").select("semester").execute().data
+    semester_counts: dict[str, int] = {}
+    for row in pc_rows:
+        sem = row["semester"]
+        semester_counts[sem] = semester_counts.get(sem, 0) + 1
+
+    pushed_terms = {
+        sem: {"pushed_at": "pre-status-tracking", "professor_classes": count}
+        for sem, count in semester_counts.items()
+    }
+
+    status = {
+        "pushed_terms": pushed_terms,
+        "total_courses_in_db": courses_count,
+        "total_professors_in_db": professors_count,
+        "last_synced": str(date.today()),
+    }
+
+    save_push_status(status)
+
+    print(f"  {courses_count} courses in DB")
+    print(f"  {professors_count} professors in DB")
+    print(f"  {len(pushed_terms)} terms with professor_classes:")
+    for sem, count in sorted(semester_counts.items()):
+        print(f"    {sem}: {count} links")
+    print(f"\nWrote {PUSH_STATUS_FILE}")
 
 
 # ---------------------------------------------------------------------------
@@ -80,8 +137,6 @@ def push_courses(sb: Client, courses: list[dict], dry_run: bool):
             "course_number": c["course_number"],
             "subject": c["subject"],
             "name": c["name"],
-            # classavg, difficulty_avg default NULL — no ratings yet
-            # review_count defaults to 0 — no reviews yet
         }
         for c in courses
     ]
@@ -92,7 +147,7 @@ def push_courses(sb: Client, courses: list[dict], dry_run: bool):
             print(f"    {r}")
         if len(rows) > 5:
             print(f"    ... and {len(rows) - 5} more")
-        return
+        return len(rows)
 
     inserted = 0
     for batch in batched(rows, BATCH_SIZE):
@@ -101,6 +156,7 @@ def push_courses(sb: Client, courses: list[dict], dry_run: bool):
         print(f"  {inserted}/{len(rows)}", end="\r")
 
     print(f"  Done. {len(rows)} courses upserted.          ")
+    return len(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -108,8 +164,6 @@ def push_courses(sb: Client, courses: list[dict], dry_run: bool):
 # ---------------------------------------------------------------------------
 
 def push_professors(sb: Client, sections: list[dict], dry_run: bool) -> dict[str, int]:
-    """Upsert all unique instructor names. Returns name -> id map."""
-
     all_names: set[str] = set()
     for s in sections:
         for name in s["instructors"]:
@@ -130,7 +184,6 @@ def push_professors(sb: Client, sections: list[dict], dry_run: bool) -> dict[str
     for batch in batched(rows, BATCH_SIZE):
         sb.table("professor").upsert(batch, on_conflict="name").execute()
 
-    # Fetch back all professors to build name -> id map
     result = sb.table("professor").select("id, name").execute()
     name_to_id = {row["name"]: row["id"] for row in result.data}
     print(f"  Done. {len(name_to_id)} professors in table.")
@@ -147,7 +200,8 @@ def push_professor_classes(
     name_to_id: dict[str, int],
     course_number_to_id: dict[str, int],
     dry_run: bool,
-):
+) -> dict[str, int]:
+    """Returns semester -> professor_classes count for status tracking."""
     print(f"\n[Phase 3] Building professor_classes links...")
 
     rows = []
@@ -157,7 +211,6 @@ def push_professor_classes(
         if not class_id:
             skipped += 1
             continue
-
         for name in s["instructors"]:
             if name == "Staff" or not name:
                 continue
@@ -171,7 +224,6 @@ def push_professor_classes(
                 "semester": s["semester"],
             })
 
-    # Deduplicate (same prof can appear in multiple section groups)
     seen = set()
     unique_rows = []
     for r in rows:
@@ -186,7 +238,7 @@ def push_professor_classes(
         print(f"  DRY RUN — would upsert {len(unique_rows)} rows")
         for r in unique_rows[:5]:
             print(f"    {r}")
-        return
+        return {}
 
     inserted = 0
     for batch in batched(unique_rows, BATCH_SIZE):
@@ -198,17 +250,26 @@ def push_professor_classes(
 
     print(f"  Done. {len(unique_rows)} professor_classes rows upserted.     ")
 
+    # Count per semester for status file
+    semester_counts: dict[str, int] = {}
+    for r in unique_rows:
+        sem = r["semester"]
+        semester_counts[sem] = semester_counts.get(sem, 0) + 1
+    return semester_counts
+
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
-def main(dry_run: bool, simple_run: bool):
+def main(dry_run: bool, simple_run: bool, force_push: bool):
+    status = load_push_status()
+    already_pushed = set(status.get("pushed_terms", {}).keys())
+
     courses = load_jsonl(COURSES_FILE)
     sections = load_jsonl(SECTIONS_FILE)
 
     if simple_run:
-        # Pick one section that has a named instructor so all three phases have data
         sample_section = next(
             (s for s in sections if s["instructors"] and s["instructors"][0] != "Staff"),
             sections[0],
@@ -220,37 +281,70 @@ def main(dry_run: bool, simple_run: bool):
         courses = [sample_course]
         sections = [sample_section]
         print(f"[simple-run] Using: {sample_course['course_number']} / {sample_section['instructors']}")
+    else:
+        # Filter sections to only unpushed terms
+        all_terms = {s["semester"] for s in sections}
+        new_terms = all_terms - already_pushed if not force_push else all_terms
+        skipped_terms = all_terms - new_terms
+
+        if skipped_terms:
+            print(f"Skipping {len(skipped_terms)} already-pushed term(s): {sorted(skipped_terms)}")
+            print(f"  Use --force-push to re-push them.")
+
+        if not new_terms:
+            print("Nothing new to push. All terms already in push_status.json.")
+            print("Run --sync-status to verify DB state, or --force-push to re-push anyway.")
+            return
+
+        sections = [s for s in sections if s["semester"] in new_terms]
+        print(f"Pushing {len(new_terms)} new term(s): {sorted(new_terms)}")
 
     print(f"Loaded {len(courses)} courses, {len(sections)} section records.")
 
     sb = None if dry_run else supabase_client()
 
     push_courses(sb, courses, dry_run)
-
     name_to_id = push_professors(sb, sections, dry_run)
 
-    # Fetch class id map after courses are upserted
     course_number_to_id: dict[str, int] = {}
     if not dry_run:
         result = sb.table("classes").select("id, course_number").execute()
         course_number_to_id = {row["course_number"]: row["id"] for row in result.data}
 
-    push_professor_classes(sb, sections, name_to_id, course_number_to_id, dry_run)
+    semester_counts = push_professor_classes(sb, sections, name_to_id, course_number_to_id, dry_run)
+
+    # Update push_status.json (skip for dry-run and simple-run)
+    if not dry_run and not simple_run and semester_counts:
+        for sem, count in semester_counts.items():
+            status["pushed_terms"][sem] = {
+                "pushed_at": str(date.today()),
+                "professor_classes": count,
+            }
+        # Refresh totals
+        total_courses = sb.table("classes").select("id", count="exact").execute().count
+        total_professors = sb.table("professor").select("id", count="exact").execute().count
+        status["total_courses_in_db"] = total_courses
+        status["total_professors_in_db"] = total_professors
+        status["last_synced"] = str(date.today())
+        save_push_status(status)
+        print(f"\nUpdated push_status.json — {len(status['pushed_terms'])} total terms pushed.")
 
     print("\nAll done.")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print what would be inserted without writing to Supabase",
-    )
-    parser.add_argument(
-        "--simple-run",
-        action="store_true",
-        help="Push exactly one course, one professor, and one professor_classes row to verify the schema",
-    )
+    parser.add_argument("--sync-status", action="store_true",
+                        help="Query Supabase and write current state to push_status.json")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print what would be inserted without writing to Supabase")
+    parser.add_argument("--simple-run", action="store_true",
+                        help="Push one row of each type to verify the schema")
+    parser.add_argument("--force-push", action="store_true",
+                        help="Re-push terms already recorded in push_status.json")
     args = parser.parse_args()
-    main(dry_run=args.dry_run, simple_run=args.simple_run)
+
+    if args.sync_status:
+        sync_status_from_supabase(supabase_client())
+    else:
+        main(dry_run=args.dry_run, simple_run=args.simple_run, force_push=args.force_push)
