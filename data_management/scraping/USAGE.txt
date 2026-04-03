@@ -1,0 +1,28 @@
+SCRAPER USAGE
+=============
+
+Setup (first time only):
+    cd data_management/scraping
+    python -m venv .venv
+    source .venv/bin/activate
+    pip install -r requirements.txt
+
+Run:
+    python scraper.py                               # most recent term, all subjects
+    python scraper.py --term "Spring 2025"          # specific term, all subjects
+    python scraper.py --subject COMPSCI             # most recent term, one subject
+    python scraper.py --term "Fall 2024" --subject COMPSCI   # both filters
+
+Output:
+    out/courses.json   — one JSON object per line, unique courses
+    out/sections.json  — one JSON object per line, course+semester+instructors
+
+Output shape:
+    courses:  { course_number, subject, number, name }
+    sections: { course_number, semester, instructors: [...] }
+
+Notes:
+    - A browser window will open — this is normal, SPIRE requires a real session
+    - Winter terms have very few courses; use Spring or Fall for full data
+    - Re-running appends to existing output files — delete out/*.json first for a clean run
+    - SPIRE is slow; a full subject sweep takes a few minutes per subject

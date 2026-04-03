@@ -1,0 +1,351 @@
+# CourseLens — Data Usage Guide
+## Working with the Supabase Schema
+
+---
+
+## 1. Table Overview
+
+The database consists of six tables:
+
+| Table               | Purpose                                                  |
+|---------------------|----------------------------------------------------------|
+| classes             | Course catalog (one row per unique course)                |
+| professor           | Professor identity (one row per unique professor)         |
+| professor_classes   | Which professor taught which course in which semester     |
+| prerequisites       | Prerequisite relationships between courses                |
+| evaluations         | Student-submitted course evaluations with grades          |
+| evaluation_flags    | Flags raised against individual evaluations               |
+
+There is no metrics table. All analytics are computed dynamically from evaluations.
+
+---
+
+## 2. Table Definitions and Column Reference
+
+### classes
+
+| Column        | Type             | Constraints              | Notes                                      |
+|---------------|------------------|--------------------------|---------------------------------------------|
+| id            | integer          | PK, auto-generated       | Internal surrogate key                       |
+| course_number | varchar          | NOT NULL, UNIQUE         | Natural key, e.g. "COMPSCI 320"             |
+| subject       | varchar          | NOT NULL                 | Department prefix, e.g. "COMPSCI"           |
+| name          | varchar          | NOT NULL                 | Course title, e.g. "Software Engineering"   |
+| description   | text             | nullable                 | Catalog description                          |
+| credits       | integer          | nullable                 | Credit hours                                 |
+| classavg      | double precision | nullable                 | Cached average GPA (computed from evals)     |
+
+- Use `course_number` as the conflict target for upserts during scraping.
+- `classavg` is a cached value — recompute it from evaluations when needed.
+
+### professor
+
+| Column | Type    | Constraints        | Notes                            |
+|--------|---------|--------------------|----------------------------------|
+| id     | integer | PK, auto-generated | Internal surrogate key            |
+| name   | varchar | NOT NULL, UNIQUE   | Full name, used for deduplication |
+| email  | varchar | nullable           | Optional contact                  |
+
+- Upsert on `name` to avoid duplicates during scraping or eval submission.
+
+### professor_classes
+
+| Column   | Type    | Constraints                       | Notes                          |
+|----------|---------|-----------------------------------|--------------------------------|
+| prof_id  | integer | NOT NULL, FK → professor(id)      | Which professor                 |
+| class_id | integer | NOT NULL, FK → classes(id)        | Which course                    |
+| semester | varchar | NOT NULL                          | e.g. "Spring 2025"             |
+
+- Composite PK: (prof_id, class_id, semester).
+- One row per professor-course-semester combination.
+- Source of truth for "who taught what and when."
+
+### prerequisites
+
+| Column     | Type    | Constraints                  | Notes                         |
+|------------|---------|------------------------------|-------------------------------|
+| prereq_id  | integer | NOT NULL, FK → classes(id)   | The prerequisite course        |
+| postreq_id | integer | NOT NULL, FK → classes(id)   | The course that requires it    |
+
+- Composite PK: (prereq_id, postreq_id).
+- Self-referential many-to-many on the classes table.
+
+### evaluations
+
+| Column     | Type             | Constraints                       | Notes                                |
+|------------|------------------|-----------------------------------|--------------------------------------|
+| id         | integer          | PK, auto-generated                | Surrogate key for flagging           |
+| class_id   | integer          | NOT NULL, FK → classes(id)        | Which course was evaluated            |
+| student_id | integer          | NOT NULL, FK → students(id)       | Who submitted                         |
+| prof_id    | integer          | FK → professor(id), nullable      | Which professor the student had       |
+| grade      | varchar(3)       | nullable                          | Letter grade, e.g. "A", "B+", "A-"  |
+| difficulty | double precision | nullable                          | Student-rated difficulty (1–10)       |
+| semester   | varchar          | nullable                          | Semester the student took the course  |
+
+- UNIQUE constraint on (class_id, student_id) — one evaluation per student per course.
+- `id` exists so evaluations can be referenced by evaluation_flags.
+- `prof_id` enables splitting analytics by instructor for the same course.
+- `semester` enables time-series analytics (GPA trends).
+
+### evaluation_flags
+
+| Column     | Type        | Constraints                       | Notes                         |
+|------------|-------------|-----------------------------------|-------------------------------|
+| id         | integer     | PK, auto-generated                | Internal surrogate key         |
+| eval_id    | integer     | NOT NULL, FK → evaluations(id)    | Which evaluation is flagged    |
+| reason     | text        | nullable                          | Why it was flagged             |
+| flagged_at | timestamptz | DEFAULT now()                     | When the flag was created      |
+
+- A single evaluation can be flagged multiple times.
+- Flags do not modify or delete the evaluation itself.
+
+---
+
+## 3. Key Relationships
+
+```
+classes ──< professor_classes >── professor
+  │
+  ├──< evaluations >── students
+  │         │
+  │         └──< evaluation_flags
+  │
+  └──< prerequisites (self-referential)
+```
+
+- classes ↔ professor is many-to-many through professor_classes.
+- classes ↔ students is many-to-many through evaluations.
+- classes ↔ classes is many-to-many through prerequisites.
+- evaluations → evaluation_flags is one-to-many.
+
+---
+
+## 4. Common Query Patterns
+
+### Get all professors who taught a specific course
+
+```sql
+SELECT p.name, pc.semester
+FROM professor p
+JOIN professor_classes pc ON pc.prof_id = p.id
+JOIN classes c ON c.id = pc.class_id
+WHERE c.course_number = 'COMPSCI 320'
+ORDER BY pc.semester DESC;
+```
+
+### Get all courses a professor has taught
+
+```sql
+SELECT c.course_number, c.name, pc.semester
+FROM classes c
+JOIN professor_classes pc ON pc.class_id = c.id
+JOIN professor p ON p.id = pc.prof_id
+WHERE p.name = 'Tim Richards'
+ORDER BY pc.semester DESC;
+```
+
+### Compute grade distribution for a course
+
+```sql
+SELECT grade, COUNT(*) AS count
+FROM evaluations
+WHERE class_id = (SELECT id FROM classes WHERE course_number = 'COMPSCI 320')
+  AND grade IS NOT NULL
+GROUP BY grade
+ORDER BY grade;
+```
+
+### Compute average GPA for a course
+
+Use a CASE expression to map letter grades to GPA points:
+
+```sql
+SELECT AVG(
+  CASE grade
+    WHEN 'A+' THEN 4.0 WHEN 'A' THEN 4.0 WHEN 'A-' THEN 3.7
+    WHEN 'B+' THEN 3.3 WHEN 'B' THEN 3.0 WHEN 'B-' THEN 2.7
+    WHEN 'C+' THEN 2.3 WHEN 'C' THEN 2.0 WHEN 'C-' THEN 1.7
+    WHEN 'D+' THEN 1.3 WHEN 'D' THEN 1.0 WHEN 'D-' THEN 0.7
+    WHEN 'F'  THEN 0.0
+    ELSE NULL
+  END
+) AS avg_gpa
+FROM evaluations
+WHERE class_id = (SELECT id FROM classes WHERE course_number = 'COMPSCI 320')
+  AND grade IS NOT NULL;
+```
+
+### GPA trend by semester for a course
+
+```sql
+SELECT semester, AVG(
+  CASE grade
+    WHEN 'A+' THEN 4.0 WHEN 'A' THEN 4.0 WHEN 'A-' THEN 3.7
+    WHEN 'B+' THEN 3.3 WHEN 'B' THEN 3.0 WHEN 'B-' THEN 2.7
+    WHEN 'C+' THEN 2.3 WHEN 'C' THEN 2.0 WHEN 'C-' THEN 1.7
+    WHEN 'D+' THEN 1.3 WHEN 'D' THEN 1.0 WHEN 'D-' THEN 0.7
+    WHEN 'F'  THEN 0.0
+    ELSE NULL
+  END
+) AS avg_gpa
+FROM evaluations
+WHERE class_id = (SELECT id FROM classes WHERE course_number = 'COMPSCI 320')
+  AND grade IS NOT NULL AND semester IS NOT NULL
+GROUP BY semester
+ORDER BY semester;
+```
+
+### Professor comparison (grade distribution per professor for one course)
+
+```sql
+SELECT p.name, e.grade, COUNT(*) AS count
+FROM evaluations e
+JOIN professor p ON p.id = e.prof_id
+WHERE e.class_id = (SELECT id FROM classes WHERE course_number = 'COMPSCI 320')
+  AND e.grade IS NOT NULL
+GROUP BY p.name, e.grade
+ORDER BY p.name, e.grade;
+```
+
+### Average difficulty for a course
+
+```sql
+SELECT AVG(difficulty) AS avg_difficulty
+FROM evaluations
+WHERE class_id = (SELECT id FROM classes WHERE course_number = 'COMPSCI 320')
+  AND difficulty IS NOT NULL;
+```
+
+### Get prerequisites for a course
+
+```sql
+SELECT prereq.course_number, prereq.name
+FROM prerequisites pr
+JOIN classes prereq ON prereq.id = pr.prereq_id
+WHERE pr.postreq_id = (SELECT id FROM classes WHERE course_number = 'COMPSCI 320');
+```
+
+### Get courses that require a given course as a prerequisite
+
+```sql
+SELECT post.course_number, post.name
+FROM prerequisites pr
+JOIN classes post ON post.id = pr.postreq_id
+WHERE pr.prereq_id = (SELECT id FROM classes WHERE course_number = 'COMPSCI 187');
+```
+
+### Flag an evaluation
+
+```sql
+INSERT INTO evaluation_flags (eval_id, reason)
+VALUES (42, 'Suspected spam submission');
+```
+
+### Get all flags for an evaluation
+
+```sql
+SELECT reason, flagged_at
+FROM evaluation_flags
+WHERE eval_id = 42
+ORDER BY flagged_at DESC;
+```
+
+---
+
+## 5. Insert / Upsert Patterns
+
+### Upsert a course (scraping)
+
+```sql
+INSERT INTO classes (course_number, subject, name, description, credits)
+VALUES ('COMPSCI 320', 'COMPSCI', 'Software Engineering', 'Course description...', 3)
+ON CONFLICT (course_number) DO UPDATE SET
+  name = EXCLUDED.name,
+  description = EXCLUDED.description,
+  credits = EXCLUDED.credits;
+```
+
+### Upsert a professor (scraping or eval submission)
+
+```sql
+INSERT INTO professor (name)
+VALUES ('Tim Richards')
+ON CONFLICT (name) DO NOTHING
+RETURNING id;
+```
+
+If the name already exists, query separately to get the existing id.
+
+### Link professor to a course-semester
+
+```sql
+INSERT INTO professor_classes (prof_id, class_id, semester)
+VALUES (1, 5, 'Spring 2025')
+ON CONFLICT DO NOTHING;
+```
+
+### Insert a prerequisite
+
+```sql
+INSERT INTO prerequisites (prereq_id, postreq_id)
+VALUES (3, 5)
+ON CONFLICT DO NOTHING;
+```
+
+### Submit an evaluation
+
+```sql
+INSERT INTO evaluations (class_id, student_id, prof_id, grade, difficulty, semester)
+VALUES (5, 12, 1, 'B+', 7.5, 'Fall 2024');
+```
+
+- If the (class_id, student_id) pair already exists, this will fail due to the UNIQUE constraint.
+- Handle this in application code by checking for conflict and prompting the user.
+
+---
+
+## 6. Important Constraints to Respect
+
+1. One evaluation per student per course — enforced by UNIQUE (class_id, student_id).
+2. One professor record per name — enforced by UNIQUE on professor.name.
+3. One course record per course_number — enforced by UNIQUE on classes.course_number.
+4. professor_classes entries are unique per (prof_id, class_id, semester).
+5. prerequisite pairs are unique per (prereq_id, postreq_id).
+6. evaluations.id is the only stable way to reference an evaluation (used by evaluation_flags).
+7. All foreign keys use integer ids — resolve natural keys (course_number, professor name) to ids before inserting into join tables.
+
+---
+
+## 7. Notes on Dynamic Metrics
+
+There is no materialized metrics table. All analytics (grade distribution, average GPA, GPA trend,
+difficulty score, professor comparison) are computed on the fly from the evaluations table.
+
+This is appropriate for the current data scale. If performance becomes a concern, consider:
+- PostgreSQL materialized views refreshed on a schedule
+- Application-level caching in the Flask analytics layer
+- A cached metrics table populated by triggers on evaluation inserts
+
+---
+
+## 8. Grade Encoding
+
+Grades are stored as short strings in evaluations.grade (varchar(3)):
+
+| Grade | GPA  |
+|-------|------|
+| A+    | 4.0  |
+| A     | 4.0  |
+| A-    | 3.7  |
+| B+    | 3.3  |
+| B     | 3.0  |
+| B-    | 2.7  |
+| C+    | 2.3  |
+| C     | 2.0  |
+| C-    | 1.7  |
+| D+    | 1.3  |
+| D     | 1.0  |
+| D-    | 0.7  |
+| F     | 0.0  |
+
+Application code must map these to numeric GPA values for any computation. The CASE expression
+shown in section 4 is the standard pattern for this in SQL.
