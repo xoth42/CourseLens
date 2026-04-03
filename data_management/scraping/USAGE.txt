@@ -12,6 +12,9 @@ Run:
     python scraper.py --term "Spring 2025"          # specific term, all subjects
     python scraper.py --subject COMPSCI             # most recent term, one subject
     python scraper.py --term "Fall 2024" --subject COMPSCI   # both filters
+    python scraper.py --years 4                     # all terms from last 4 years
+    python scraper.py --all-terms                   # every term in the SPIRE dropdown
+    python scraper.py --force                       # re-scrape terms already in session
 
 Output:
     out/courses.json   — one JSON object per line, unique courses
@@ -20,6 +23,17 @@ Output:
 Output shape:
     courses:  { course_number, subject, number, name }
     sections: { course_number, semester, instructors: [...] }
+
+Push to Supabase (after scraping):
+    cp .env.example .env              # fill in SUPABASE_URL and SUPABASE_KEY
+    pip install -r requirements.txt
+    python push_to_supabase.py --dry-run   # preview without writing
+    python push_to_supabase.py             # live write
+
+Push phases:
+    1. classes       — upserts on course_number; classavg/difficulty_avg NULL, review_count 0
+    2. professor     — upserts on name
+    3. professor_classes — links prof_id + class_id + semester
 
 Notes:
     - A browser window will open — this is normal, SPIRE requires a real session

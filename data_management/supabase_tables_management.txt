@@ -1,0 +1,23 @@
+# CourseLens — Supabase Table Management Commands
+
+## Remove All Elements From Each Table
+
+-- Order matters: delete from child tables first to respect foreign key constraints.
+
+-- 1. evaluation_flags (depends on evaluations)
+DELETE FROM public.evaluation_flags;
+
+-- 2. evaluations (depends on classes, students, professor)
+DELETE FROM public.evaluations;
+
+-- 3. professor_classes (depends on professor, classes)
+DELETE FROM public.professor_classes;
+
+-- 4. prerequisites (depends on classes)
+DELETE FROM public.prerequisites;
+
+-- 5. professor
+DELETE FROM public.professor;
+
+-- 6. classes
+DELETE FROM public.classes;

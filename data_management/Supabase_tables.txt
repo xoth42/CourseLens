@@ -13,7 +13,9 @@ CREATE TABLE public.classes (
   name varchar NOT NULL,
   description text,
   credits integer,
-  classavg double precision
+  classavg double precision DEFAULT NULL,   -- NULL = no ratings yet
+  difficulty_avg double precision DEFAULT NULL, -- NULL = no ratings yet
+  review_count integer DEFAULT 0            -- 0 = no reviews yet
 );
 
 CREATE TABLE public.professor (
