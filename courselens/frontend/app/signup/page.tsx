@@ -29,7 +29,7 @@ export default function Signup() {
 
 
    return (<>
-       <div className="bg-[#f8f9fa] min-h-screen flex items-center justify-center">
+       <div className="flex min-h-0 flex-1 items-center justify-center bg-[#f8f9fa]">
            <div className="w-[360px]">
            <div className="bg-white shadow-[0_0_20px_rgba(0,0,0,0.2),0_5px_5px_rgba(0,0,0,0.24)] p-[45px] text-center">
 
