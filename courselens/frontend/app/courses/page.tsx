@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { supabase } from "@/lib/supabase/client";
 
 type Course = {
   id: number;
@@ -59,13 +60,8 @@ export default function CoursesPage() {
   const filterLabel = filterType === "professor" ? "Professor" : "Department";
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 px-6 py-4">
-        <h1 className="text-2xl font-bold text-gray-900">CourseLens</h1>
-        <p className="text-sm text-gray-500">Find and review UMass courses</p>
-      </header>
-
-      <main className="max-w-4xl mx-auto px-4 py-8">
+    <div className="min-h-full flex-1 bg-gray-50">
+      <main className="mx-auto max-w-4xl px-4 py-8">
         <h2 className="text-xl font-semibold text-gray-800 mb-6">Browse Courses</h2>
 
         <div className="flex flex-col sm:flex-row gap-3 mb-4">

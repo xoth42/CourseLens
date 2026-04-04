@@ -1,0 +1,8 @@
+{
+  "name": "courselens-monorepo",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix courselens",
+    "install:app": "npm install --prefix courselens"
+  }
+}

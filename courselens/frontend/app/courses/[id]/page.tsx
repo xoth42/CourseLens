@@ -26,7 +26,7 @@ export default function CourseDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="flex min-h-[50vh] flex-1 items-center justify-center bg-gray-50">
         <p className="text-gray-500">Loading...</p>
       </div>
     );
@@ -34,20 +34,15 @@ export default function CourseDetailPage() {
 
   if (!course) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="flex min-h-[50vh] flex-1 items-center justify-center bg-gray-50">
         <p className="text-gray-500">Course not found.</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 px-6 py-4">
-        <h1 className="text-2xl font-bold text-gray-900">CourseLens</h1>
-        <p className="text-sm text-gray-500">Find and review UMass courses</p>
-      </header>
-
-      <main className="max-w-4xl mx-auto px-4 py-8">
+    <div className="min-h-full flex-1 bg-gray-50">
+      <main className="mx-auto max-w-4xl px-4 py-8">
         <Link href="/courses" className="text-sm text-blue-600 hover:underline mb-6 inline-block">
           ← Back to courses
         </Link>
@@ -77,6 +72,15 @@ export default function CourseDetailPage() {
           </div>
 
           <p className="text-gray-700 mb-6">{course.description}</p>
+
+          <div className="mb-6">
+            <Link
+              href={`/courses/${course.id}/evaluate`}
+              className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              Write a review
+            </Link>
+          </div>
 
           <div className="grid grid-cols-3 gap-4 text-center">
             <div className="bg-gray-50 rounded-lg p-4">
