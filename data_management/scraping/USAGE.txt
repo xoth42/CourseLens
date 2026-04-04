@@ -10,19 +10,51 @@ Setup (first time only):
 Run:
     python scraper.py                               # most recent term, all subjects
     python scraper.py --term "Spring 2025"          # specific term, all subjects
-    python scraper.py --subject COMPSCI             # most recent term, one subject
+    python scraper.py --subject COMPSCI             # most recent term, one subject (good for testing)
     python scraper.py --term "Fall 2024" --subject COMPSCI   # both filters
+    python scraper.py --years 4                     # all terms from the last 4 years
+    python scraper.py --all-terms                   # every term in the SPIRE dropdown
+    python scraper.py --force                       # ignore session, re-scrape everything
 
 Output:
-    out/courses.json   — one JSON object per line, unique courses
-    out/sections.json  — one JSON object per line, course+semester+instructors
+    out/courses.json    — one JSON object per line, unique courses
+    out/sections.json   — one JSON object per line, course+semester+instructors
+    out/session.json    — tracks scrape progress across runs (do not delete mid-run)
 
 Output shape:
     courses:  { course_number, subject, number, name }
     sections: { course_number, semester, instructors: [...] }
 
+Session / resume behavior:
+    - Progress is saved after every subject, not just at term end
+    - If the scraper crashes or is quit, re-running continues from where it left off
+    - Ctrl-C finishes the current subject, saves, then exits cleanly
+      (press Ctrl-C twice to force-quit immediately)
+    - To manually mark a term as done (e.g. already pushed to Supabase):
+        echo '{"completed_terms": ["Winter 2026", "Spring 2026"], "completed_subjects": {}}' > out/session.json
+    - Use --force to re-scrape terms already marked complete
+
+Push to Supabase (after scraping):
+    cp .env.example .env                               # fill in SUPABASE_URL and SUPABASE_KEY
+    pip install -r requirements.txt
+    python push_to_supabase.py --sync-status           # query DB, write push_status.json
+    python push_to_supabase.py --simple-run --dry-run  # preview one row of each type
+    python push_to_supabase.py --simple-run            # write one row each, verify in Supabase
+    python push_to_supabase.py --dry-run               # preview full push
+    python push_to_supabase.py                         # push all terms not in push_status.json
+    python push_to_supabase.py --force-push            # re-push terms already in push_status.json
+
+Push phases:
+    1. classes           — upserts on course_number; classavg/difficulty_avg NULL, review_count 0
+    2. professor         — upserts on name
+    3. professor_classes — links prof_id + class_id + semester (filtered to new terms only)
+
+Push status file:
+    out/push_status.json — tracks which terms are in Supabase with counts and push date
+    Run --sync-status first to populate it from the live DB before pushing new terms
+
 Notes:
-    - A browser window will open — this is normal, SPIRE requires a real session
-    - Winter terms have very few courses; use Spring or Fall for full data
-    - Re-running appends to existing output files — delete out/*.json first for a clean run
-    - SPIRE is slow; a full subject sweep takes a few minutes per subject
+    - A browser window will open — this is normal, SPIRE requires a real browser session
+    - Winter terms have very few courses; use Spring or Fall for meaningful data
+    - Output files are appended per subject — safe to resume without losing data
+    - SPIRE is slow; expect a few minutes per subject for full terms

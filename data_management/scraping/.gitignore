@@ -1,2 +1,6 @@
 .venv
 
+out
+out/*
+
+.env

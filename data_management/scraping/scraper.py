@@ -1,18 +1,37 @@
 """
-scraper.py — dirty single-file SPIRE scraper
-Writes JSON Lines to out/courses.json and out/sections.json.
+scraper.py — Selenium-based SPIRE class search scraper.
+
+Navigates UMass SPIRE via a real Chrome session, iterates every subject for
+the requested term(s), and writes results as JSON Lines to out/.
+
+Output files:
+    out/courses.json   — one unique course per line: {course_number, subject, number, name}
+    out/sections.json  — one term entry per line:    {course_number, semester, instructors:[...]}
+    out/session.json   — scrape progress tracker; enables resume after interruption
 
 Usage:
     pip install -r requirements.txt
-    python scraper.py                        # scrapes most recent term
-    python scraper.py --term "Spring 2025"   # scrapes a specific term
-    python scraper.py --subject COMPSCI      # one subject only (for testing)
+    python scraper.py                               # most recent term, all subjects
+    python scraper.py --term "Spring 2025"          # specific term, all subjects
+    python scraper.py --subject COMPSCI             # one subject only (good for testing)
+    python scraper.py --years 4                     # all terms from the last 4 years
+    python scraper.py --all-terms                   # every term in the SPIRE dropdown
+    python scraper.py --force                       # ignore session, re-scrape everything
+
+Resume / Ctrl-C:
+    Progress is saved after every subject. If interrupted, re-run the same command to resume.
+    Ctrl-C finishes the current subject, saves, then exits. Ctrl-C twice force-quits.
+    To manually mark terms as done: edit out/session.json directly (see USAGE.txt).
+
+A browser window will open — SPIRE requires a real session and cannot be scraped headlessly
+without risk of detection. This is expected behavior.
 """
 
 import argparse
 import json
 import os
 import re
+import signal
 import sys
 from time import sleep
 
@@ -255,14 +274,167 @@ def initialize_search(driver: webdriver.Chrome, term_value: str, subject_value: 
 # Main scrape loop
 # ---------------------------------------------------------------------------
 
-def scrape(term_filter: str | None, subject_filter: str | None):
-    os.makedirs(OUT_DIR, exist_ok=True)
+def _select_terms(term_options: list, term_filter: str | None, all_terms: bool, years: int | None) -> list:
+    if term_filter:
+        matched = [(v, t) for v, t in term_options if t == term_filter]
+        if not matched:
+            print(f"ERROR: term {term_filter!r} not found. Available:")
+            for _, t in term_options:
+                print(f"  {t}")
+            sys.exit(1)
+        return matched
+
+    if all_terms or years:
+        cutoff_year = None
+        if years:
+            # term text is e.g. "Spring 2025" — parse year from end
+            import datetime
+            cutoff_year = datetime.date.today().year - years
+        result = []
+        for v, t in term_options:
+            if cutoff_year:
+                try:
+                    term_year = int(t.split()[-1])
+                    if term_year < cutoff_year:
+                        continue
+                except ValueError:
+                    pass
+            result.append((v, t))
+        return result
+
+    # Default: most recent term only
+    return [term_options[0]]
+
+
+# ---------------------------------------------------------------------------
+# Ctrl-C handler — finish current subject, then save and quit cleanly
+# ---------------------------------------------------------------------------
+
+_quit_requested = False
+
+
+def _sigint_handler(sig, frame):
+    global _quit_requested
+    if _quit_requested:
+        print("\nForce quitting.")
+        sys.exit(1)
+    print("\nCtrl-C caught — finishing current subject then saving session. Ctrl-C again to force quit.")
+    _quit_requested = True
+
+
+signal.signal(signal.SIGINT, _sigint_handler)
+
+
+# ---------------------------------------------------------------------------
+# Session — tracks completed terms and in-progress subjects across runs
+# ---------------------------------------------------------------------------
+
+SESSION_FILE = os.path.join(OUT_DIR, "session.json")
+
+
+def load_session() -> tuple[set[str], dict[str, set[str]]]:
+    """
+    Returns:
+        completed_terms  — set of fully-scraped term labels
+        completed_subjects — dict of term -> set of scraped subject IDs (partial terms)
+    """
+    if not os.path.exists(SESSION_FILE):
+        return set(), {}
+    with open(SESSION_FILE) as f:
+        data = json.load(f)
+    completed_terms = set(data.get("completed_terms", []))
+    completed_subjects = {
+        term: set(subjects)
+        for term, subjects in data.get("completed_subjects", {}).items()
+    }
+    return completed_terms, completed_subjects
+
+
+def save_session(completed_terms: set[str], completed_subjects: dict[str, set[str]]):
+    with open(SESSION_FILE, "w") as f:
+        json.dump(
+            {
+                "completed_terms": sorted(completed_terms),
+                "completed_subjects": {
+                    term: sorted(subjects)
+                    for term, subjects in completed_subjects.items()
+                    if subjects  # omit empty entries
+                },
+            },
+            f,
+            indent=2,
+        )
+
+
+def load_existing_output() -> tuple[set[str], set[tuple]]:
+    """
+    Read any existing courses.json and sections.json so we don't duplicate
+    rows that were written in a previous run.
+    """
+    seen_courses: set[str] = set()
+    seen_sections: set[tuple] = set()
+
+    courses_path = os.path.join(OUT_DIR, "courses.json")
+    if os.path.exists(courses_path):
+        with open(courses_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        row = json.loads(line)
+                        seen_courses.add(row["course_number"])
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
+    sections_path = os.path.join(OUT_DIR, "sections.json")
+    if os.path.exists(sections_path):
+        with open(sections_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        row = json.loads(line)
+                        seen_sections.add((row["course_number"], row["semester"]))
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
+    return seen_courses, seen_sections
+
+
+def append_output(courses: list[dict], sections: list[dict]):
+    """Append new rows to the output files immediately after each term."""
     courses_path = os.path.join(OUT_DIR, "courses.json")
     sections_path = os.path.join(OUT_DIR, "sections.json")
 
-    seen_courses: set[str] = set()
-    all_courses: list[dict] = []
-    all_sections: list[dict] = []
+    with open(courses_path, "a") as f:
+        for c in courses:
+            f.write(json.dumps(c) + "\n")
+
+    with open(sections_path, "a") as f:
+        for s in sections:
+            f.write(json.dumps(s) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Main scrape loop
+# ---------------------------------------------------------------------------
+
+def scrape(term_filter: str | None, subject_filter: str | None, all_terms: bool, years: int | None, force: bool):
+    global _quit_requested
+    os.makedirs(OUT_DIR, exist_ok=True)
+
+    completed_terms, completed_subjects = load_session()
+    if (completed_terms or completed_subjects) and not force:
+        print(f"Session: {len(completed_terms)} full term(s) done, {len(completed_subjects)} partial term(s).")
+        if completed_terms:
+            print(f"  Complete: {sorted(completed_terms)}")
+        if completed_subjects:
+            for term, subjects in sorted(completed_subjects.items()):
+                print(f"  Partial — {term}: {len(subjects)} subjects done")
+        print(f"  Use --force to re-scrape everything.")
+
+    seen_courses, seen_sections = load_existing_output()
+    print(f"Existing output: {len(seen_courses)} courses, {len(seen_sections)} sections already on disk.")
 
     driver = make_driver()
     try:
@@ -271,29 +443,32 @@ def scrape(term_filter: str | None, subject_filter: str | None):
         term_options, subject_options = get_options(driver)
         print(f"Found {len(term_options)} terms, {len(subject_options)} subjects.")
 
-        # Pick term
-        if term_filter:
-            matched = [(v, t) for v, t in term_options if t == term_filter]
-            if not matched:
-                print(f"ERROR: term {term_filter!r} not found. Available:")
-                for _, t in term_options:
-                    print(f"  {t}")
-                sys.exit(1)
-            target_terms = matched
-        else:
-            # Default: most recent term
-            target_terms = [term_options[0]]
-
+        target_terms = _select_terms(term_options, term_filter, all_terms, years)
         print(f"Target term(s): {[t for _, t in target_terms]}")
 
         for term_value, term_label in target_terms:
-            print(f"\n=== {term_label} ===")
+            if _quit_requested:
+                break
+
+            if term_label in completed_terms and not force:
+                print(f"\n=== {term_label} — SKIPPING (complete in session) ===")
+                continue
+
+            done_subjects = completed_subjects.get(term_label, set()) if not force else set()
+            skipped_subjects = len(done_subjects)
+            print(f"\n=== {term_label} ==={f' (resuming — {skipped_subjects} subjects already done)' if skipped_subjects else ''}")
 
             for subject_value, subject_title in subject_options:
-                subject_id = subject_value  # e.g. "COMPSCI"
+                if _quit_requested:
+                    break
+
+                subject_id = subject_value
 
                 if subject_filter and subject_id != subject_filter:
                     continue
+
+                if subject_id in done_subjects:
+                    continue  # already scraped in a previous interrupted run
 
                 print(f"  Searching {subject_id}...", end=" ", flush=True)
 
@@ -302,14 +477,16 @@ def scrape(term_filter: str | None, subject_filter: str | None):
                     click_and_wait(driver, "CLASS_SRCH_WRK2_SSR_PB_CLASS_SRCH")
                 except TimeoutException:
                     print("TIMEOUT on search, skipping.")
-                    # Try to get back to search form
                     try:
                         click_and_wait(driver, "CLASS_SRCH_WRK2_SSR_PB_NEW_SEARCH")
                     except Exception:
                         pass
                     continue
+                except Exception:
+                    if _quit_requested:
+                        break  # Ctrl-C interrupted a live selenium call — expected
+                    raise
 
-                # Check for "no results" error
                 error_span = None
                 try:
                     error_span = driver.find_element(By.ID, "DERIVED_CLSMSG_ERROR_TEXT")
@@ -318,42 +495,52 @@ def scrape(term_filter: str | None, subject_filter: str | None):
 
                 if error_span:
                     print(f"no results.")
-                    try:
-                        click_and_wait(driver, "CLASS_SRCH_WRK2_SSR_PB_NEW_SEARCH")
-                    except Exception:
-                        pass
+                    # Still mark as done so we don't re-check it on resume
+                    completed_subjects.setdefault(term_label, set()).add(subject_id)
+                    save_session(completed_terms, completed_subjects)
                     continue
 
                 courses, sections = parse_results(driver, term_label, subject_id)
                 print(f"{len(courses)} courses.")
 
+                new_courses = []
                 for c in courses:
                     if c["course_number"] not in seen_courses:
                         seen_courses.add(c["course_number"])
-                        all_courses.append(c)
+                        new_courses.append(c)
 
-                all_sections.extend(sections)
+                new_sections = []
+                for s in sections:
+                    key = (s["course_number"], s["semester"])
+                    if key not in seen_sections:
+                        seen_sections.add(key)
+                        new_sections.append(s)
+
+                # Save after every subject so partial runs are preserved
+                append_output(new_courses, new_sections)
+                completed_subjects.setdefault(term_label, set()).add(subject_id)
+                save_session(completed_terms, completed_subjects)
 
                 try:
                     click_and_wait(driver, "CLASS_SRCH_WRK2_SSR_PB_NEW_SEARCH")
                 except TimeoutException:
                     print("  WARNING: could not return to new search.")
 
+            # Mark term fully complete only if we finished all subjects without quitting
+            if not _quit_requested and not subject_filter:
+                completed_terms.add(term_label)
+                completed_subjects.pop(term_label, None)  # clean up partial entry
+                save_session(completed_terms, completed_subjects)
+                print(f"  {term_label} complete.")
+
     finally:
-        driver.quit()
-
-    # Write output
-    with open(courses_path, "w") as f:
-        for c in all_courses:
-            f.write(json.dumps(c) + "\n")
-
-    with open(sections_path, "w") as f:
-        for s in all_sections:
-            f.write(json.dumps(s) + "\n")
-
-    print(f"\nDone. {len(all_courses)} unique courses, {len(all_sections)} section records.")
-    print(f"  {courses_path}")
-    print(f"  {sections_path}")
+        try:
+            driver.quit()
+        except Exception:
+            pass  # driver may already be dead if Ctrl-C hit mid-call
+        if _quit_requested:
+            print(f"\nQuit early. Progress saved to session.json — re-run to resume.")
+        print(f"\nSession: {sorted(completed_terms)} complete, {list(completed_subjects.keys())} partial.")
 
 
 # ---------------------------------------------------------------------------
@@ -362,8 +549,17 @@ def scrape(term_filter: str | None, subject_filter: str | None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--term", help='e.g. "Spring 2025"')
-    parser.add_argument("--subject", help='e.g. COMPSCI — useful for a quick test run')
+    parser.add_argument("--term", help='Single term, e.g. "Spring 2025"')
+    parser.add_argument("--subject", help='Single subject, e.g. COMPSCI — useful for testing')
+    parser.add_argument("--all-terms", action="store_true", help="Scrape every term in the SPIRE dropdown")
+    parser.add_argument("--years", type=int, help="Scrape all terms within the last N years, e.g. --years 4")
+    parser.add_argument("--force", action="store_true", help="Ignore session and re-scrape already-completed terms")
     args = parser.parse_args()
 
-    scrape(term_filter=args.term, subject_filter=args.subject)
+    scrape(
+        term_filter=args.term,
+        subject_filter=args.subject,
+        all_terms=args.all_terms,
+        years=args.years,
+        force=args.force,
+    )

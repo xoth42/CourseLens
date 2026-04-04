@@ -3,6 +3,11 @@
 Group 2 | CourseLens | UMass Amherst CS320
 
 ---
+## NOTE: This is a historical planning document.
+## For the current implemented schema, see:  Supabase_tables.txt
+## For column-level reference and query patterns, see: TABLES_USAGE.txt
+## For scraping and push pipeline, see:      scraping/USAGE.txt
+---
 
 ## 1. Project Overview
 
