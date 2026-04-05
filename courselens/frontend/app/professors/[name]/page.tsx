@@ -26,7 +26,7 @@ export default function ProfessorDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="flex min-h-[50vh] flex-1 items-center justify-center bg-gray-50">
         <p className="text-gray-500">Loading...</p>
       </div>
     );
@@ -34,7 +34,7 @@ export default function ProfessorDetailPage() {
 
   if (courses.length === 0) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="flex min-h-[50vh] flex-1 items-center justify-center bg-gray-50">
         <p className="text-gray-500">Professor not found.</p>
       </div>
     );
@@ -46,13 +46,8 @@ export default function ProfessorDetailPage() {
   const department = courses[0].department;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 px-6 py-4">
-        <h1 className="text-2xl font-bold text-gray-900">CourseLens</h1>
-        <p className="text-sm text-gray-500">Find and review UMass courses</p>
-      </header>
-
-      <main className="max-w-4xl mx-auto px-4 py-8">
+    <div className="min-h-full flex-1 bg-gray-50">
+      <main className="mx-auto max-w-4xl px-4 py-8">
         <Link href="/courses" className="text-sm text-blue-600 hover:underline mb-6 inline-block">
           ← Back to courses
         </Link>
