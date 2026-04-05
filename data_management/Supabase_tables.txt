@@ -1,0 +1,56 @@
+# Migration SQL — run this in Supabase SQL editor to replace the broken schema
+
+DROP TABLE IF EXISTS public.metrics CASCADE;
+DROP TABLE IF EXISTS public.prerequisites CASCADE;
+DROP TABLE IF EXISTS public.professor CASCADE;
+DROP TABLE IF EXISTS public.evaluations CASCADE;
+DROP TABLE IF EXISTS public.classes CASCADE;
+
+CREATE TABLE public.classes (
+  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  course_number varchar NOT NULL UNIQUE,
+  subject varchar NOT NULL,
+  name varchar NOT NULL,
+  description text,
+  credits integer,
+  classavg double precision
+);
+
+CREATE TABLE public.professor (
+  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name varchar NOT NULL UNIQUE,
+  email varchar
+);
+
+CREATE TABLE public.professor_classes (
+  prof_id integer NOT NULL REFERENCES public.professor(id),
+  class_id integer NOT NULL REFERENCES public.classes(id),
+  semester varchar NOT NULL,
+  PRIMARY KEY (prof_id, class_id, semester)
+);
+
+CREATE TABLE public.prerequisites (
+  prereq_id integer NOT NULL REFERENCES public.classes(id),
+  postreq_id integer NOT NULL REFERENCES public.classes(id),
+  PRIMARY KEY (prereq_id, postreq_id)
+);
+
+CREATE TABLE public.evaluations (
+  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  class_id integer NOT NULL REFERENCES public.classes(id),
+  student_id integer NOT NULL REFERENCES public.students(id),
+  prof_id integer REFERENCES public.professor(id),
+  grade varchar(3),
+  difficulty double precision,
+  semester varchar,
+  UNIQUE (class_id, student_id)
+);
+
+CREATE TABLE public.evaluation_flags (
+  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  eval_id integer NOT NULL REFERENCES public.evaluations(id),
+  reason text,
+  flagged_at timestamptz DEFAULT now()
+);
+
+-- metrics table is intentionally omitted; compute dynamically from evaluations

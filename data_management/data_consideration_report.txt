@@ -1,0 +1,206 @@
+# CourseLens — Technical Planning Report
+## Schema, Architecture, and Scraping Handoff Document
+Group 2 | CourseLens | UMass Amherst CS320
+
+---
+
+## 1. Project Overview
+
+CourseLens is a course metrics and helper system for UMass Amherst students. Users sign up with a university email, submit evaluations for classes they have taken (including their grade and a difficulty rating), and can view aggregated metrics for any course or professor. The system is seeded with course catalog data, professor-section history, and prerequisites via scraping, then grows organically through user evaluations.
+
+Tech stack: Next.js + React frontend, Python/Flask for scraping and data processing, Supabase (PostgreSQL) as the database, Plotly for visualizations, Jest + Python unittest + Playwright for testing, GitHub CI.
+
+---
+
+## 2. Data Sources
+
+Two categories of data exist in this system: scraped/static data that seeds the database, and user-submitted data that populates evaluations. These must be kept conceptually separate because they have different update cadences, different trust levels, and different failure modes.
+
+Scraped data covers course catalog entries (course number, name, description, credits), prerequisites, professor names, and the mapping of which professor taught which course in which semester. The primary source for this is the Melanson SPIRE API (spire-api.melanson.dev), a personal project by Daniel Melanson that wraps UMass SPIRE with a RESTful interface. It covers all sections from Fall 2018 onward and includes courses, sections, subjects, and instructor data. The author also offers a full pg_dump of the database on request via GitHub issue or email, which may be preferable to repeated API calls for the initial seed. If this API is unavailable (it is a personal project with no uptime guarantees), the fallback is direct Selenium-based scraping of SPIRE, which is a PeopleSoft portal behind a session and cannot be accessed via simple HTTP requests. A secondary, now-deprecated tool by the same author (umass-cics-course-scraper) was CICS-specific and should not be used; it redirects to the API project.
+
+User-submitted data covers grades per evaluation, difficulty ratings, and semester context. This data drives all analytics functions.
+
+---
+
+## 3. Original Schema and Its Problems
+
+The schema as initially drafted has the following concrete defects that must be corrected before development proceeds.
+
+The evaluations table uses class_id alone as its primary key. This means the table can only store one evaluation per course total, which breaks the entire purpose of the system. The correct primary key is the composite (class_id, student_id), enforcing one evaluation per student per course.
+
+The evaluations table is missing a grade field. Every analytics function in the modules document (computeGradeDistribution, computeAvgGPA, computeGPATrend, predictGrade, ProfessorComparisonChart) requires access to grades at the individual evaluation level. Without this field, none of those functions can be implemented correctly. Grade should be stored as a short varchar or character field (e.g. 'A', 'A-', 'B+').
+
+The evaluations table has no surrogate primary key (eval_id). The flagEvaluation(evalID, reason) function in the modules document requires addressing individual evaluations by a stable integer ID. The composite (class_id, student_id) key is not suitable for this. A generated integer id column must be added, with the uniqueness constraint on (class_id, student_id) enforced separately.
+
+The professor table has no name column. It only contains id and class_id. This means professor identity cannot be stored, only a foreign key to a class. Additionally, class_id on the professor table is a modeling error: a professor teaches many classes across many semesters, so this is a many-to-many relationship that must be expressed via a join table.
+
+The prerequisites table uses only prereq_id as its primary key. This means a course can have at most one prerequisite. The primary key must be the composite (prereq_id, postreq_id).
+
+The metrics table has no foreign key linking it to a class. Without this, the 1:1 relationship between a class and its metrics noted in the diagram cannot be enforced. More importantly, the metrics table as designed stores only aggregate floats, which is insufficient: computeGPATrend requires per-semester granularity, and ProfessorComparisonChart requires per-professor granularity for the same course. Storing metrics as a flat row per class cannot support these.
+
+The classes table is missing columns needed from the scrape: course_number (e.g. 'CS320' or 'COMPSCI 320'), subject (e.g. 'COMPSCI'), description, and credits. Without course_number as a stable natural key, upsert operations during scraping have no reliable conflict target.
+
+---
+
+## 4. Corrected Schema
+
+What follows is the recommended schema. All tables include rationale for non-obvious decisions.
+
+classes: Stores the course catalog. course_number is a varchar unique column used as the natural key for scrape upserts (e.g. ON CONFLICT (course_number) DO UPDATE). classavg is retained from the original but should be treated as a cached value computed from evaluations, not a source of truth. subject is stored separately to enable filtering by department. description and credits come from the SPIRE catalog scrape.
+
+professor: Stores professor identity. name must be unique to support deduplication during scraping and during the addProfessor() write function. Email is optional and may not always be available from the scrape.
+
+professor_classes: Join table replacing the class_id column that was incorrectly on the professor table. Each row records that a given professor taught a given course in a given semester. This is what the Melanson API populates. The primary key is (prof_id, class_id, semester). This table is the source of truth for the "teachers taught" display on a course page and for professor pages.
+
+prerequisites: Self-referential many-to-many on classes. Both prereq_id and postreq_id are foreign keys into classes.id. Primary key is the composite (prereq_id, postreq_id).
+
+students: Unchanged from original except password storage — ensure passwords are hashed before insert; do not store plaintext.
+
+evaluations: Revised significantly. Contains id (surrogate, generated), class_id, student_id, prof_id, grade (varchar), difficulty (float, 1-10 user rating), and semester. Uniqueness is enforced on (class_id, student_id). The prof_id here allows ProfessorComparisonChart to split evaluations by instructor for the same course.
+
+evaluation_flags: New table required by flagEvaluation(). Contains id, eval_id (foreign key to evaluations.id), reason (text), and flagged_at (timestamptz). A single evaluation can be flagged multiple times or for different reasons, so this is a separate table rather than a column on evaluations.
+
+metrics: Recommended to be dropped entirely from the physical schema for the current development phase. All metrics (grade distribution, average GPA, GPA trend, difficulty score) should be computed dynamically from the evaluations table either in Supabase PostgreSQL functions or in the Flask analytics layer. At UMass course scale with initially sparse eval data, query performance will not be a bottleneck. If it becomes one later, introduce a materialized view or a cached metrics table at that point. Premature materialization creates a synchronization problem: every eval insert must invalidate and recompute the cached metric, which adds complexity with no current benefit.
+
+---
+
+## 5. Full Revised Schema (SQL Reference)
+
+CREATE TABLE public.classes (
+  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  course_number varchar NOT NULL UNIQUE,
+  subject varchar NOT NULL,
+  name varchar NOT NULL,
+  description text,
+  credits integer,
+  classavg double precision
+);
+
+CREATE TABLE public.professor (
+  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name varchar NOT NULL UNIQUE,
+  email varchar
+);
+
+CREATE TABLE public.professor_classes (
+  prof_id integer NOT NULL REFERENCES professor(id),
+  class_id integer NOT NULL REFERENCES classes(id),
+  semester varchar NOT NULL,
+  PRIMARY KEY (prof_id, class_id, semester)
+);
+
+CREATE TABLE public.prerequisites (
+  prereq_id integer NOT NULL REFERENCES classes(id),
+  postreq_id integer NOT NULL REFERENCES classes(id),
+  PRIMARY KEY (prereq_id, postreq_id)
+);
+
+CREATE TABLE public.students (
+  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  email varchar NOT NULL UNIQUE,
+  password varchar NOT NULL
+);
+
+CREATE TABLE public.evaluations (
+  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  class_id integer NOT NULL REFERENCES classes(id),
+  student_id integer NOT NULL REFERENCES students(id),
+  prof_id integer REFERENCES professor(id),
+  grade varchar(3),
+  difficulty double precision,
+  semester varchar,
+  UNIQUE (class_id, student_id)
+);
+
+CREATE TABLE public.evaluation_flags (
+  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  eval_id integer NOT NULL REFERENCES evaluations(id),
+  reason text,
+  flagged_at timestamptz DEFAULT now()
+);
+
+---
+
+## 6. Scraping Strategy
+
+The scrape pipeline is the responsibility of the Flask layer. It runs once for the initial seed and then on a per-semester schedule to pick up new sections and instructor assignments.
+
+Phase 1 — Seed course catalog: Hit the Melanson SPIRE API /courses endpoint (or use a pg_dump if obtained). For each course, extract course_number, subject, name, description, and credits. Upsert into classes using ON CONFLICT (course_number) DO UPDATE to handle re-runs safely. Normalize course_number to a canonical format before insert (see section 8 on deduplication).
+
+Phase 2 — Seed prerequisites: Parse prerequisite data from the SPIRE catalog. The Melanson API includes this. For each prerequisite relationship, resolve both the prereq and postreq course_numbers to their classes.id values, then insert into prerequisites. Use ON CONFLICT DO NOTHING.
+
+Phase 3 — Seed professors and sections: Hit the Melanson API /sections endpoint filtered by term. For each section, extract the instructor name and the course it belongs to. Upsert the professor name into professor (ON CONFLICT (name) DO NOTHING), then insert into professor_classes with the resolved prof_id, class_id, and semester. This covers Fall 2018 onward. Data prior to Fall 2018 is not available from this source without direct SPIRE scraping.
+
+If the Melanson API is unavailable: scraping SPIRE directly requires Selenium because SPIRE is a PeopleSoft application that renders content via JavaScript and maintains session state. A headless browser session must be established, the class search form submitted per subject/term combination, and results parsed from the rendered DOM. This is significantly more complex and fragile than using the existing API. Exhaust the API option first, including contacting the author for a database dump.
+
+---
+
+## 7. Analytics Functions and Their Data Dependencies
+
+Each analytics function from the modules document has specific data requirements that must be satisfied by the schema.
+
+computeGradeDistribution(courseID) — requires evaluations rows where class_id matches and grade is populated. Returns counts per grade letter. No precomputation needed.
+
+computeAvgGPA(data) — takes the output of computeGradeDistribution and computes a weighted GPA. Pure computation, no additional DB access.
+
+computeGPATrend(courseID, semesters) — requires evaluations to have a semester column populated. Groups by semester, computes average GPA per group, returns a time series. Evaluations must store semester for this to work.
+
+computeDifficultyScore(courseID) — derived from both grade distribution and the difficulty float in evaluations. Requires both grade and difficulty to be present on evaluation rows.
+
+predictGrade(courseID, userGPA) — estimates a grade based on historical course data and the student's GPA. This requires evaluations to store grades and ideally a student GPA field somewhere. Student GPA is not currently in the schema. Either add it to students, or compute it from the student's own evaluation history (average of their own grades across courses). The latter is more consistent with the data model but requires a helper query.
+
+ProfessorComparisonChart — requires evaluations to have prof_id populated so grade distributions can be split by instructor for the same course. prof_id on evaluations is already in the revised schema.
+
+getCourseData(courseID, professor?) — fetches course data with optional professor filter. This hits classes joined to professor_classes joined to professor, with optional evaluations aggregate. The professor filter uses professor.name, so the join path is: classes → professor_classes → professor WHERE professor.name = ?.
+
+getProfessorData(professorName) — fetches all courses and grade data for a professor. Join path: professor → professor_classes → classes, then aggregate evaluations where prof_id matches.
+
+---
+
+## 8. Course Number Deduplication and Normalization
+
+Use case 4 in the presentation explicitly anticipates the problem of a user entering "CompSci 320" when "CS320" already exists. This must be handled in addCourse() before any DB write, not at the constraint level alone.
+
+The canonical format should be decided once and applied consistently. A reasonable choice is subject prefix concatenated with course number, no space, uppercase: COMPSCI320, MATH235, PHYSICS151. The SPIRE catalog uses full subject names (COMPSCI, CICS, MATH, STATISTIC, PHYSICS, etc.), so use those as the canonical subject component.
+
+The normalization function in Flask should: strip whitespace, uppercase the input, expand known abbreviations (CS → COMPSCI, STATS → STATISTIC), and concatenate. Apply this to both the scrape pipeline and the user-facing addCourse() endpoint. On the DB side, the UNIQUE constraint on course_number enforces correctness after normalization.
+
+A lookup table of known abbreviation expansions is worth maintaining explicitly rather than relying on heuristics. The SPIRE subject list is finite and can be hardcoded or seeded.
+
+---
+
+## 9. Write Function Considerations
+
+addEvaluation() must enforce the UNIQUE (class_id, student_id) constraint. In Supabase this means using upsert with ON CONFLICT (class_id, student_id) DO NOTHING or returning an error to the frontend if a duplicate is attempted. Do not silently overwrite a previous evaluation without user confirmation.
+
+addProfessor() should upsert on professor.name. If the name already exists, return the existing professor's id rather than inserting a duplicate. This is the deduplication mechanism for the scrape pipeline and for user-triggered professor additions via eval submission.
+
+addCourse() must run normalization before the DB write. It should also check whether the normalized course_number already exists and return a conflict error with the existing course's name, so the frontend can prompt the user ("Did you mean COMPSCI320?").
+
+updateCourseData() should be restricted to administrator-level access or at minimum require a flag that the calling user has been granted edit rights. Unrestricted course editing by any authenticated user is a data integrity risk.
+
+flagEvaluation() inserts a row into evaluation_flags. It does not delete or modify the evaluation itself. A separate admin review flow (not specified in the current use cases) would be needed to act on flags. For now, flags are collected but not actioned.
+
+---
+
+## 10. Authentication Note
+
+The students table stores a password column as varchar. Plaintext password storage is not acceptable. Before any user-facing deployment, passwords must be hashed using bcrypt or argon2 before insert, and verified by comparing the hash on login. Supabase Auth can handle this entirely if you use its built-in auth system, which would also eliminate the need to manage the students table manually for auth purposes. If you use Supabase Auth, the students table becomes a profile table linked to the Supabase auth.users table by UUID, and you remove the password column from it entirely.
+
+---
+
+## 11. Open Questions for the Next Editor
+
+The following items are unresolved and require a decision before implementation:
+
+Whether to use Supabase Auth or roll your own auth. This affects the students table structure and the entire signup/login flow.
+
+Whether predictGrade() computes student GPA from their own evaluation history or requires a stored GPA field. The former is more consistent but more expensive per query.
+
+Whether the metrics table is kept as a materialized cache or dropped in favor of dynamic computation. This report recommends dropping it for now.
+
+What the per-semester scrape schedule looks like and who triggers it — manual, cron, or GitHub Actions workflow.
+
+Whether professor.name alone is sufficient for deduplication or whether a more robust identifier (e.g. UMass directory ID) is needed. Name collision across different professors with the same name is a real edge case.
+
+Whether evaluations require the student to specify the semester they took the course, or whether it is inferred from the current date at submission time. Inferred semester is less accurate for students submitting retroactively.

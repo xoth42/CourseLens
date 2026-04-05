@@ -1,0 +1,10 @@
+{
+  "name": "courselens-frontend",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix ..",
+    "build": "npm run build --prefix ..",
+    "start": "npm run start --prefix ..",
+    "lint": "npm run lint --prefix .."
+  }
+}
