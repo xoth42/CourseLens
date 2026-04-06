@@ -35,7 +35,7 @@ export default function CoursesPage() {
 
   useEffect(() => {
     async function fetchCourses() {
-      const { data, error } = await supabase.from("courses").select("*");
+      const { data, error } = await supabase.from("course_metrics").select("*");
       if (!error && data) setCourses(data);
       setLoading(false);
     }

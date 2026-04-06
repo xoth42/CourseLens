@@ -6,6 +6,20 @@ import { useState, useEffect } from "react";
 import { supabase } from "../../../lib/supabase/client";
 import type { Course } from "../../../types/course";
 
+function gpaToLetter(gpa: number): string {
+  if (gpa === 0) return "N/A";
+  if (gpa >= 3.85) return "A";
+  if (gpa >= 3.5)  return "A-";
+  if (gpa >= 3.15) return "B+";
+  if (gpa >= 2.85) return "B";
+  if (gpa >= 2.5)  return "B-";
+  if (gpa >= 2.15) return "C+";
+  if (gpa >= 1.85) return "C";
+  if (gpa >= 1.5)  return "C-";
+  if (gpa >= 1.15) return "D+";
+  return "D";
+}
+
 export default function CourseDetailPage() {
   const { id } = useParams();
   const [course, setCourse] = useState<Course | null>(null);
@@ -14,7 +28,7 @@ export default function CourseDetailPage() {
   useEffect(() => {
     async function fetchCourse() {
       const { data, error } = await supabase
-        .from("courses")
+        .from("course_metrics")
         .select("*")
         .eq("id", Number(id))
         .single();
@@ -92,9 +106,10 @@ export default function CourseDetailPage() {
               <div className="text-sm text-gray-500">Difficulty</div>
             </div>
             <div className="bg-gray-50 rounded-lg p-4">
-              <div className="text-2xl font-bold text-gray-800">{course.reviews}</div>
-              <div className="text-sm text-gray-500">Reviews</div>
+            <div className="text-2xl font-bold text-gray-800">{gpaToLetter(course.avg_gpa)}</div>
+             <div className="text-sm text-gray-500">Avg. GPA</div>
             </div>
+
           </div>
         </div>
       </main>
