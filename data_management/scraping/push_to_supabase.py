@@ -70,9 +70,13 @@ def sync_status_from_supabase(sb: Client):
         by_term[sem]["prof_ids"].add(row["prof_id"])
         by_term[sem]["links"] += 1
 
+    # Preserve existing pushed_at dates — only use "pre-status-tracking" for newly discovered terms
+    existing_status = load_push_status()
+    existing_terms = existing_status.get("pushed_terms", {})
+
     pushed_terms = {
         sem: {
-            "pushed_at": "pre-status-tracking",
+            "pushed_at": existing_terms.get(sem, {}).get("pushed_at", "pre-status-tracking"),
             "professor_classes": d["links"],
             "unique_courses_linked": len(d["class_ids"]),
             "unique_professors_linked": len(d["prof_ids"]),
@@ -224,8 +228,8 @@ def push_professor_classes(
     name_to_id: dict[str, int],
     course_number_to_id: dict[str, int],
     dry_run: bool,
-) -> dict[str, int]:
-    """Returns semester -> professor_classes count for status tracking."""
+) -> dict[str, dict]:
+    """Returns semester -> {professor_classes, unique_courses_linked, unique_professors_linked}."""
     print(f"\n[Phase 3] Building professor_classes links...")
 
     rows = []
@@ -298,12 +302,16 @@ def push_professor_classes(
 # Entry point
 # ---------------------------------------------------------------------------
 
-def main(dry_run: bool, simple_run: bool, force_push: bool):
+def main(dry_run: bool, simple_run: bool, force_push: bool,
+         term_filter: str | None, subject_filter: str | None):
     status = load_push_status()
     already_pushed = set(status.get("pushed_terms", {}).keys())
 
     courses = load_jsonl(COURSES_FILE)
     sections = load_jsonl(SECTIONS_FILE)
+
+    # partial_push = True means we won't mark any term as fully pushed in status
+    partial_push = bool(subject_filter)
 
     if simple_run:
         sample_section = next(
@@ -318,22 +326,40 @@ def main(dry_run: bool, simple_run: bool, force_push: bool):
         sections = [sample_section]
         print(f"[simple-run] Using: {sample_course['course_number']} / {sample_section['instructors']}")
     else:
-        # Filter sections to only unpushed terms
-        all_terms = {s["semester"] for s in sections}
-        new_terms = all_terms - already_pushed if not force_push else all_terms
-        skipped_terms = all_terms - new_terms
+        # Apply term filter
+        if term_filter:
+            sections = [s for s in sections if s["semester"] == term_filter]
+            if not sections:
+                print(f"ERROR: no sections found for term {term_filter!r} in sections.json.")
+                return
+            if term_filter in already_pushed and not force_push:
+                print(f"WARNING: {term_filter!r} is already in push_status.json.")
+                print(f"  Re-pushing anyway since --term was explicit. Use --force-push to suppress this warning.")
+            print(f"Term filter: {term_filter}")
+        else:
+            # Skip already-pushed terms unless forced
+            all_terms = {s["semester"] for s in sections}
+            new_terms = all_terms - already_pushed if not force_push else all_terms
+            skipped_terms = all_terms - new_terms
+            if skipped_terms:
+                print(f"Skipping {len(skipped_terms)} already-pushed term(s): {sorted(skipped_terms)}")
+                print(f"  Use --force-push to re-push them.")
+            if not new_terms:
+                print("Nothing new to push. All terms already in push_status.json.")
+                print("Run --sync-status to verify DB state, or --force-push to re-push anyway.")
+                return
+            sections = [s for s in sections if s["semester"] in new_terms]
+            print(f"Pushing {len(new_terms)} new term(s): {sorted(new_terms)}")
 
-        if skipped_terms:
-            print(f"Skipping {len(skipped_terms)} already-pushed term(s): {sorted(skipped_terms)}")
-            print(f"  Use --force-push to re-push them.")
-
-        if not new_terms:
-            print("Nothing new to push. All terms already in push_status.json.")
-            print("Run --sync-status to verify DB state, or --force-push to re-push anyway.")
-            return
-
-        sections = [s for s in sections if s["semester"] in new_terms]
-        print(f"Pushing {len(new_terms)} new term(s): {sorted(new_terms)}")
+        # Apply subject filter (course_number starts with subject prefix)
+        if subject_filter:
+            prefix = subject_filter.upper()
+            sections = [s for s in sections if s["course_number"].startswith(prefix)]
+            courses = [c for c in courses if c["course_number"].startswith(prefix)]
+            if not sections:
+                print(f"ERROR: no sections found for subject {subject_filter!r}.")
+                return
+            print(f"Subject filter: {subject_filter} — {len(sections)} section records, {len(courses)} courses.")
 
     print(f"Loaded {len(courses)} courses, {len(sections)} section records.")
 
@@ -349,8 +375,8 @@ def main(dry_run: bool, simple_run: bool, force_push: bool):
 
     semester_counts = push_professor_classes(sb, sections, name_to_id, course_number_to_id, dry_run)
 
-    # Update push_status.json (skip for dry-run and simple-run)
-    if not dry_run and not simple_run and semester_counts:
+    # Update push_status.json — skip for dry-run, simple-run, and partial (subject-filtered) pushes
+    if not dry_run and not simple_run and not partial_push and semester_counts:
         for sem, stats in semester_counts.items():
             status["pushed_terms"][sem] = {
                 "pushed_at": str(date.today()),
@@ -368,6 +394,9 @@ def main(dry_run: bool, simple_run: bool, force_push: bool):
         status["last_synced"] = str(date.today())
         save_push_status(status)
         print(f"\nUpdated push_status.json — {len(status['pushed_terms'])} total terms pushed.")
+    elif partial_push and not dry_run:
+        print(f"\nPartial push (subject filter active) — push_status.json not updated.")
+        print(f"  Run --sync-status after all subjects are pushed to refresh status.")
 
     print("\nAll done.")
 
@@ -382,9 +411,12 @@ if __name__ == "__main__":
                         help="Push one row of each type to verify the schema")
     parser.add_argument("--force-push", action="store_true",
                         help="Re-push terms already recorded in push_status.json")
+    parser.add_argument("--term", help='Filter to a specific term, e.g. "Fall 2026"')
+    parser.add_argument("--subject", help='Filter to a subject prefix, e.g. COMPSCI')
     args = parser.parse_args()
 
     if args.sync_status:
         sync_status_from_supabase(supabase_client())
     else:
-        main(dry_run=args.dry_run, simple_run=args.simple_run, force_push=args.force_push)
+        main(dry_run=args.dry_run, simple_run=args.simple_run, force_push=args.force_push,
+             term_filter=args.term, subject_filter=args.subject)
