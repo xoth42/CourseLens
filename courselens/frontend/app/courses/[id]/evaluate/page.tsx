@@ -82,6 +82,21 @@ export default function EvaluateCoursePage() {
       }
 
       setStudentProfileId(profileId);
+
+      if (profileId) {
+        const { data: existing } = await supabase
+          .from("course_evaluations")
+          .select("id")
+          .eq("course_id", courseId)
+          .eq("student_profile_id", profileId)
+          .maybeSingle();
+
+        if (existing) {
+          router.push(`/courses/${courseId}`);
+          return;
+        }
+      }
+
       setLoading(false);
     }
 
