@@ -58,3 +58,37 @@ Notes:
     - Winter terms have very few courses; use Spring or Fall for meaningful data
     - Output files are appended per subject — safe to resume without losing data
     - SPIRE is slow; expect a few minutes per subject for full terms
+
+──────────────────────────────────────────────────────────────────────────────
+Scrape Colleges (Academic Group) — for college-based course filtering
+──────────────────────────────────────────────────────────────────────────────
+Purpose: Maps each subject code (e.g. COMPSCI) to a college/school name
+         (e.g. "Manning College of Information & Computer Sciences").
+         This data is NOT in Class Search results — it requires clicking into
+         a section detail page to read the "Academic Group" field.
+
+Run:
+    python scrape_colleges.py                      # all subjects, most recent term first
+    python scrape_colleges.py --term "Spring 2025" # prefer this term for searches
+    python scrape_colleges.py --force              # re-scrape all subjects
+
+Output:
+    out/subject_colleges.json  — one line per subject: {"subject": "COMPSCI", "college": "..."}
+    out/college_session.json   — resume tracker; delete to restart
+
+Resume behavior:
+    - Progress is saved after every subject
+    - Re-run the same command to resume from where it stopped
+    - Use --force to re-scrape subjects already in college_session.json
+
+Subjects with no results in any tried term are recorded as college = "Other".
+This includes cross-program subjects like HONORS, BDIC, GRADSCH, MILITARY, etc.
+These can be corrected manually by editing subject_colleges.json before pushing.
+
+Push college data to Supabase (after scraping):
+    1. Run colleges_migration.sql in the Supabase SQL editor to create the tables
+    2. python push_colleges.py --dry-run    # preview
+    3. python push_colleges.py              # write to Supabase
+
+Migration SQL:
+    data_management/scripts/colleges_migration.sql
