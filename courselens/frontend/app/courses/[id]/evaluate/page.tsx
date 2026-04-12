@@ -22,6 +22,9 @@ export default function EvaluateCoursePage() {
   const [grade, setGrade] = useState("");
   const [semester, setSemester] = useState("");
   const [comment, setComment] = useState("");
+  const [professorName, setProfessorName] = useState("");
+  const [hoursPerWeek, setHoursPerWeek] = useState<number | "">("");
+  const [courseProfessors, setCourseProfessors] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
   const [profileSetupError, setProfileSetupError] = useState<string | null>(null);
@@ -40,8 +43,15 @@ export default function EvaluateCoursePage() {
         .select("*")
         .eq("id", courseId)
         .single();
-
-      if (!courseError && courseRow) setCourse(courseRow as Course);
+        const { data: profRows } = await supabase
+        .from("professor_classes")
+        .select("professor(name)")
+        .eq("class_id", courseId);
+        if (profRows) {
+          const names = profRows.map((r: any) => r.professor?.name).filter(Boolean);
+          setCourseProfessors(names);
+        }
+        if (!courseError && courseRow) setCourse(courseRow as Course);
 
       const { data: sessionData } = await supabase.auth.getSession();
       const user = sessionData.session?.user ?? null;
@@ -103,10 +113,13 @@ export default function EvaluateCoursePage() {
       student_profile_id: studentProfileId,
       rating,
       difficulty,
-      grade: grade.trim() || null,
+      grade: grade || null,
       semester: semester.trim() || null,
       comment: comment.trim() || null,
+      professor_name: professorName || null,
+      hours_per_week: hoursPerWeek !== "" ? hoursPerWeek : null,
     });
+    
 
     setSubmitting(false);
 
@@ -193,26 +206,74 @@ export default function EvaluateCoursePage() {
 
           <form className="mt-8 space-y-5" onSubmit={handleSubmit}>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Overall rating (1–5)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Grade</label>
+              <select
+                value={grade}
+                onChange={(e) => setGrade(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900"
+              >
+                <option value="">Select grade</option>
+                {["A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "F"].map((g) => (
+                  <option key={g} value={g}>{g}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Semester</label>
+              <select
+                value={semester}
+                onChange={(e) => setSemester(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900"
+              >
+                <option value="">Select semester</option>
+                {["Spring 2026", "Fall 2025", "Spring 2025", "Fall 2024", "Spring 2024", "Fall 2023"].map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Instructor</label>
+              {courseProfessors.length > 0 ? (
+                <select
+                  value={professorName}
+                  onChange={(e) => setProfessorName(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900"
+                >
+                  <option value="">Select instructor</option>
+                  {courseProfessors.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={professorName}
+                  onChange={(e) => setProfessorName(e.target.value)}
+                  placeholder="Instructor name"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900"
+                />
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Hours per week</label>
               <input
-                type="range"
+                type="number"
                 min={1}
-                max={5}
-                step={0.5}
-                value={rating}
-                onChange={(e) => setRating(Number(e.target.value))}
-                className="w-full"
+                max={40}
+                value={hoursPerWeek}
+                onChange={(e) => setHoursPerWeek(e.target.value === "" ? "" : Number(e.target.value))}
+                placeholder="e.g. 8"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900"
               />
-              <p className="text-sm text-gray-600 mt-1">{rating.toFixed(1)} / 5</p>
             </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Difficulty (1–5)</label>
               <input
-                type="range"
-                min={1}
-                max={5}
-                step={0.5}
+                type="range" min={1} max={5} step={0.5}
                 value={difficulty}
                 onChange={(e) => setDifficulty(Number(e.target.value))}
                 className="w-full"
@@ -221,26 +282,14 @@ export default function EvaluateCoursePage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Grade (optional)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Overall rating (1–5)</label>
               <input
-                type="text"
-                value={grade}
-                onChange={(e) => setGrade(e.target.value)}
-                placeholder="e.g. A-"
-                maxLength={3}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900"
+                type="range" min={1} max={5} step={0.5}
+                value={rating}
+                onChange={(e) => setRating(Number(e.target.value))}
+                className="w-full"
               />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Semester (optional)</label>
-              <input
-                type="text"
-                value={semester}
-                onChange={(e) => setSemester(e.target.value)}
-                placeholder="e.g. Fall 2025"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900"
-              />
+              <p className="text-sm text-gray-600 mt-1">{rating.toFixed(1)} / 5</p>
             </div>
 
             <div>
