@@ -36,7 +36,7 @@ export default function EvaluateCoursePage() {
 
     async function load() {
       const { data: courseRow, error: courseError } = await supabase
-        .from("courses")
+        .from("course_metrics")
         .select("*")
         .eq("id", courseId)
         .single();

@@ -15,7 +15,7 @@ export default function ProfessorDetailPage() {
   useEffect(() => {
     async function fetchCourses() {
       const { data, error } = await supabase
-        .from("courses")
+        .from("course_metrics")
         .select("*")
         .eq("professor", professorName);
       if (!error && data) setCourses(data);
