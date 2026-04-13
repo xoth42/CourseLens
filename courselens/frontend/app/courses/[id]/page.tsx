@@ -24,6 +24,8 @@ export default function CourseDetailPage() {
   const { id } = useParams();
   const [course, setCourse] = useState<Course | null>(null);
   const [loading, setLoading] = useState(true);
+  const [alreadyReviewed, setAlreadyReviewed] = useState(false);
+  const [showPopup, setShowPopup] = useState(false);
 
   useEffect(() => {
     async function fetchCourse() {
@@ -33,6 +35,26 @@ export default function CourseDetailPage() {
         .eq("id", Number(id))
         .single();
       if (!error && data) setCourse(data);
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const user = sessionData.session?.user ?? null;
+      if (user) {
+        const { data: profile } = await supabase
+          .from("student_profiles")
+          .select("id")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (profile?.id) {
+          const { data: existing } = await supabase
+            .from("course_evaluations")
+            .select("id")
+            .eq("course_id", Number(id))
+            .eq("student_profile_id", profile.id)
+            .maybeSingle();
+          if (existing) setAlreadyReviewed(true);
+        }
+      }
+
       setLoading(false);
     }
     fetchCourse();
@@ -87,13 +109,25 @@ export default function CourseDetailPage() {
 
           <p className="text-gray-700 mb-6">{course.description}</p>
 
-          <div className="mb-6">
-            <Link
-              href={`/courses/${course.id}/evaluate`}
+          <div className="mb-6 relative">
+            <button
+              onClick={() => alreadyReviewed ? setShowPopup(true) : window.location.href = `/courses/${course.id}/evaluate`}
               className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
             >
               Write a review
-            </Link>
+            </button>
+            {showPopup && (
+              <div className="absolute top-12 left-0 bg-white border border-gray-200 rounded-xl shadow-lg p-4 z-10 w-64">
+                <p className="text-sm text-gray-800 font-medium">You already reviewed this course.</p>
+                <p className="text-xs text-gray-500 mt-1">Only one review per course is allowed.</p>
+                <button
+                  onClick={() => setShowPopup(false)}
+                  className="mt-3 text-xs text-blue-600 hover:underline"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-3 gap-4 text-center">
