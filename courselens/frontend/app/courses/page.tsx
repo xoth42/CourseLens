@@ -87,6 +87,8 @@ export default function CoursesPage() {
   const [search, setSearch] = useState("");
   const [college, setCollege] = useState("");
   const [department, setDepartment] = useState("");
+  const [courseLevels, setCourseLevels] = useState<Set<number>>(new Set());
+  const [courseLevelsOpen, setCourseLevelsOpen] = useState(false);
 
   useEffect(() => {
     async function fetchCourses() {
@@ -97,6 +99,28 @@ export default function CoursesPage() {
     fetchCourses();
   }, []);
 
+  // Extract course level from course code (e.g., "CS230" → 200)
+  function getCourseLevel(code: string): number | null {
+    const match = code.match(/\d+/);
+    if (!match) return null;
+    const num = parseInt(match[0]);
+    if (num < 100) return null;
+    if (num < 200) return 100;
+    if (num < 300) return 200;
+    if (num < 400) return 300;
+    if (num < 500) return 400;
+    if (num < 600) return 500;
+    return 600;
+  }
+
+  // Get available course levels from current courses
+  const availableCourseLevels = Array.from(
+    new Set(
+      courses
+        .map((c) => getCourseLevel(c.code))
+        .filter((level): level is number => level !== null)
+    )
+  ).sort((a, b) => a - b);
   const collegeOptions = Array.from(
     new Set(
       courses
@@ -137,13 +161,31 @@ export default function CoursesPage() {
       const matchesDepartment =
         department === "" || course.department === department;
 
-      return matchesSearch && matchesCollege && matchesDepartment;
+      const courseLevel = getCourseLevel(course.code);
+      const matchesLevel =
+        courseLevels.size === 0 || (courseLevel !== null && courseLevels.has(courseLevel));
+
+      return matchesSearch && matchesCollege && matchesDepartment && matchesLevel;
     })
     .sort((a, b) => {
       if (!search.trim()) return 0;
       return scoreMatch(b, searchTerms) - scoreMatch(a, searchTerms);
     });
 
+  function toggleCourseLevel(level: number) {
+    const newLevels = new Set(courseLevels);
+    if (newLevels.has(level)) {
+      newLevels.delete(level);
+    } else {
+      newLevels.add(level);
+    }
+    setCourseLevels(newLevels);
+  }
+
+  function getLevelLabel(level: number): string {
+    if (level === 600) return "600+";
+    return `${level}`;
+  }
   return (
     <div className="min-h-full flex-1 bg-gray-50">
       <main className="mx-auto max-w-4xl px-4 py-8">
@@ -179,6 +221,33 @@ export default function CoursesPage() {
           </select>
         </div>
 
+        {/* Course Level Filter Section */}
+        <div className="border-b border-gray-200 mb-4">
+          <button
+            onClick={() => setCourseLevelsOpen(!courseLevelsOpen)}
+            className="w-full flex justify-between items-center py-3 px-0 text-left font-semibold text-gray-800 hover:text-gray-600 transition-colors"
+          >
+            <span>Course Level</span>
+            <span className="text-xl">{courseLevelsOpen ? "−" : "+"}</span>
+          </button>
+          {courseLevelsOpen && (
+            <div className="pb-3 flex flex-wrap gap-2">
+              {availableCourseLevels.map((level) => (
+                <button
+                  key={level}
+                  onClick={() => toggleCourseLevel(level)}
+                  className={`px-3 py-2 text-sm font-medium border rounded transition-colors ${
+                    courseLevels.has(level)
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+                  }`}
+                >
+                  {getLevelLabel(level)}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <p className="text-sm text-gray-400 mb-4">
           {loading ? "Loading..." : `${filteredCourses.length} course${filteredCourses.length !== 1 ? "s" : ""} found`}
         </p>
