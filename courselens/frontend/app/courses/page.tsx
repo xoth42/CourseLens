@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase/client";
+import RequestCourseModal from "@/components/RequestCourseModal";
 
 type Course = {
   id: number;
@@ -32,6 +33,7 @@ export default function CoursesPage() {
   const [professor, setProfessor] = useState("All");
   const [filterType, setFilterType] = useState<"department" | "professor">("department");
   const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const [requestModalOpen, setRequestModalOpen] = useState(false);
 
   useEffect(() => {
     async function fetchCourses() {
@@ -62,7 +64,18 @@ export default function CoursesPage() {
   return (
     <div className="min-h-full flex-1 bg-gray-50">
       <main className="mx-auto max-w-4xl px-4 py-8">
-        <h2 className="text-xl font-semibold text-gray-800 mb-6">Browse Courses</h2>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
+          <h2 className="text-xl font-semibold text-gray-800">Browse Courses</h2>
+          <button
+            type="button"
+            onClick={() => setRequestModalOpen(true)}
+            className="shrink-0 rounded-lg border border-blue-200 bg-white px-4 py-2 text-sm font-medium text-blue-700 shadow-sm hover:bg-blue-50"
+          >
+            Request a class
+          </button>
+        </div>
+
+        <RequestCourseModal open={requestModalOpen} onClose={() => setRequestModalOpen(false)} />
 
         <div className="flex flex-col sm:flex-row gap-3 mb-4">
           <input
