@@ -4,7 +4,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { supabase } from "../../../lib/supabase/client";
-import type { Course } from "../../../types/course";
+import type { Course, Review } from "../../../types/course";
 
 function gpaToLetter(gpa: number): string {
   if (gpa === 0) return "N/A";
@@ -23,18 +23,26 @@ function gpaToLetter(gpa: number): string {
 export default function CourseDetailPage() {
   const { id } = useParams();
   const [course, setCourse] = useState<Course | null>(null);
+  const [reviews, setReviews] = useState<Review[]>([]);
   const [loading, setLoading] = useState(true);
   const [alreadyReviewed, setAlreadyReviewed] = useState(false);
   const [showPopup, setShowPopup] = useState(false);
 
   useEffect(() => {
-    async function fetchCourse() {
+    async function fetchData() {
       const { data, error } = await supabase
         .from("course_metrics")
         .select("*")
         .eq("id", Number(id))
         .single();
       if (!error && data) setCourse(data);
+
+      const { data: reviewData } = await supabase
+        .from("course_evaluations")
+        .select("id, rating, difficulty, grade, semester, professor_name, hours_per_week, comment, created_at")
+        .eq("course_id", Number(id))
+        .order("created_at", { ascending: false });
+      if (reviewData) setReviews(reviewData);
 
       const { data: sessionData } = await supabase.auth.getSession();
       const user = sessionData.session?.user ?? null;
@@ -57,7 +65,7 @@ export default function CourseDetailPage() {
 
       setLoading(false);
     }
-    fetchCourse();
+    fetchData();
   }, [id]);
 
   if (loading) {
@@ -140,13 +148,69 @@ export default function CourseDetailPage() {
               <div className="text-sm text-gray-500">Difficulty</div>
             </div>
             <div className="bg-gray-50 rounded-lg p-4">
-            <div className="text-2xl font-bold text-gray-800">{gpaToLetter(course.avg_gpa)}</div>
-             <div className="text-sm text-gray-500">Avg. GPA</div>
+              <div className="text-2xl font-bold text-gray-800">{gpaToLetter(course.avg_gpa)}</div>
+              <div className="text-sm text-gray-500">Avg. Grade</div>
             </div>
-
           </div>
         </div>
+
+        {/* Reviews section */}
+        <div className="mt-8">
+          <h3 className="text-lg font-semibold text-gray-800 mb-4">
+            {reviews.length} Review{reviews.length !== 1 ? "s" : ""}
+          </h3>
+          {reviews.length === 0 ? (
+            <p className="text-gray-400 text-sm">No reviews yet. Be the first!</p>
+          ) : (
+            <div className="flex flex-col gap-4">
+              {reviews.map((r) => <ReviewCard key={r.id} review={r} />)}
+            </div>
+          )}
+        </div>
       </main>
+    </div>
+  );
+}
+
+function ReviewCard({ review }: { review: Review }) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-5">
+      <div className="flex justify-between items-start mb-3">
+        <span className="text-sm font-medium text-gray-700">Anonymous Student</span>
+        {review.semester && (
+          <span className="text-xs text-gray-400">{review.semester}</span>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-3 mb-3 text-sm">
+        <span className="bg-blue-50 text-blue-700 px-2 py-1 rounded-md">
+          Rating: {review.rating.toFixed(1)} / 5
+        </span>
+        <span className="bg-orange-50 text-orange-700 px-2 py-1 rounded-md">
+          Difficulty: {review.difficulty.toFixed(1)} / 5
+        </span>
+        {review.grade && (
+          <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md">
+            Grade: {review.grade}
+          </span>
+        )}
+        {review.hours_per_week && (
+          <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded-md">
+            {review.hours_per_week} hrs/week
+          </span>
+        )}
+        {review.professor_name && (
+          <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded-md">
+            {review.professor_name}
+          </span>
+        )}
+      </div>
+
+      {review.comment && (
+        <p className="text-sm text-gray-600 border-l-2 border-gray-200 pl-3 italic">
+          "{review.comment}"
+        </p>
+      )}
     </div>
   );
 }
