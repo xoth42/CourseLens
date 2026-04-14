@@ -175,12 +175,11 @@ export default function CourseDetailPage() {
 function ReviewCard({ review }: { review: Review }) {
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-5">
-      <div className="flex justify-between items-start mb-3">
-        <span className="text-sm font-medium text-gray-700">Anonymous Student</span>
-        {review.semester && (
+      {review.semester && (
+        <div className="flex justify-end mb-3">
           <span className="text-xs text-gray-400">{review.semester}</span>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-3 mb-3 text-sm">
         <span className="bg-blue-50 text-blue-700 px-2 py-1 rounded-md">
