@@ -89,6 +89,7 @@ export default function CoursesPage() {
   const [department, setDepartment] = useState("");
   const [courseLevels, setCourseLevels] = useState<Set<number>>(new Set());
   const [courseLevelsOpen, setCourseLevelsOpen] = useState(false);
+  const [sortBy, setSortBy] = useState<"" | "code-asc" | "code-desc">("");
 
   useEffect(() => {
     async function fetchCourses() {
@@ -98,6 +99,11 @@ export default function CoursesPage() {
     }
     fetchCourses();
   }, []);
+
+  function getCourseNumber(code: string): number {
+    const match = code.match(/\d+/);
+    return match ? parseInt(match[0]) : 0;
+  }
 
   // Extract course level from course code (e.g., "CS230" → 200)
   function getCourseLevel(code: string): number | null {
@@ -168,6 +174,8 @@ export default function CoursesPage() {
       return matchesSearch && matchesCollege && matchesDepartment && matchesLevel;
     })
     .sort((a, b) => {
+      if (sortBy === "code-asc") return getCourseNumber(a.code) - getCourseNumber(b.code);
+      if (sortBy === "code-desc") return getCourseNumber(b.code) - getCourseNumber(a.code);
       if (!search.trim()) return 0;
       return scoreMatch(b, searchTerms) - scoreMatch(a, searchTerms);
     });
@@ -219,6 +227,31 @@ export default function CoursesPage() {
               <option key={dept} value={dept}>{dept}</option>
             ))}
           </select>
+        </div>
+
+        {/* Sort Controls */}
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-sm text-gray-500 font-medium">Sort:</span>
+          <button
+            onClick={() => setSortBy(sortBy === "code-asc" ? "" : "code-asc")}
+            className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
+              sortBy === "code-asc"
+                ? "bg-blue-600 text-white border-blue-600"
+                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+            }`}
+          >
+            Code ↑
+          </button>
+          <button
+            onClick={() => setSortBy(sortBy === "code-desc" ? "" : "code-desc")}
+            className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
+              sortBy === "code-desc"
+                ? "bg-blue-600 text-white border-blue-600"
+                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+            }`}
+          >
+            Code ↓
+          </button>
         </div>
 
         {/* Course Level Filter Section */}
