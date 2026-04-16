@@ -1,9 +1,9 @@
 "use client";
-import Link from "next/link";
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import type { Session } from "@supabase/supabase-js";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
 export default function SiteHeader() {
   const [session, setSession] = useState<Session | null>(null);
@@ -37,9 +37,12 @@ export default function SiteHeader() {
             </Link>
           )}
           {session ? (
+            <>
+            <Link href="/profile" className="text-blue-600 hover:text-blue-800">Profile</Link>
             <button onClick={handleSignOut} className="text-blue-600 hover:text-blue-800">
               Sign out
             </button>
+            </>
           ) : (
             <>
               <Link href="/login" className="text-blue-600 hover:text-blue-800">Sign in</Link>
