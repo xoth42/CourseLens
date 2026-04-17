@@ -1,20 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase/client";
+import CourseSummaryCard, { type CourseListItem } from "@/components/CourseSummaryCard";
 import RequestCourseModal from "@/components/RequestCourseModal";
 
-type Course = {
-  id: number;
-  code: string;
-  name: string;
-  professor: string;
-  rating: number;
-  difficulty: number;
-  reviews: number;
-  department: string;
-};
+type Course = CourseListItem;
 
 const MOCK_COURSES: Course[] = [
   { id: 1, code: "CS 320",   name: "Software Engineering",       professor: "Dr. Lehr",       rating: 4.1, difficulty: 3.2, reviews: 45, department: "Computer Science" },
@@ -149,38 +140,11 @@ export default function CoursesPage() {
             <p className="text-center text-gray-400 py-16">No courses match your search.</p>
           ) : (
             filteredCourses.map((course) => (
-              <CourseCard key={course.id} course={course} />
+              <CourseSummaryCard key={course.id} course={course} />
             ))
           )}
         </div>
       </main>
     </div>
-  );
-}
-
-function CourseCard({ course }: { course: Course }) {
-  return (
-    <Link href={`/courses/${course.id}`}>
-      <div className="bg-white border border-gray-200 rounded-xl p-5 hover:shadow-md transition-shadow cursor-pointer">
-        <div className="flex justify-between items-start">
-          <div>
-            <span className="text-xs font-semibold bg-blue-100 text-blue-700 px-2 py-1 rounded-full">
-              {course.code}
-            </span>
-            <h3 className="text-lg font-semibold text-gray-900 mt-2">{course.name}</h3>
-            <p className="text-sm text-gray-500">{course.professor}</p>
-          </div>
-          <div className="text-right">
-            <div className="text-2xl font-bold text-blue-600">{course.rating.toFixed(1)}</div>
-            <div className="text-xs text-gray-400">/ 5.0</div>
-          </div>
-        </div>
-        <div className="flex gap-6 mt-4 text-sm text-gray-500">
-          <span>Difficulty: <strong>{course.difficulty.toFixed(1)}/5</strong></span>
-          <span>{course.reviews} reviews</span>
-          <span>{course.department}</span>
-        </div>
-      </div>
-    </Link>
   );
 }

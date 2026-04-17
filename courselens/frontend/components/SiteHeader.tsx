@@ -31,6 +31,11 @@ export default function SiteHeader() {
         </div>
         <nav className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-medium">
           <Link href="/courses" className="text-blue-600 hover:text-blue-800">Browse courses</Link>
+          {session && (
+            <Link href="/bookmarks" className="text-blue-600 hover:text-blue-800">
+              Saved
+            </Link>
+          )}
           {session ? (
             <button onClick={handleSignOut} className="text-blue-600 hover:text-blue-800">
               Sign out
