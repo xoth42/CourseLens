@@ -3,6 +3,7 @@
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useState, useEffect } from "react";
+import BookmarkButton from "@/components/BookmarkButton";
 import { supabase } from "../../../lib/supabase/client";
 import type { Course, Review, Reply } from "../../../types/course";
 
@@ -116,8 +117,8 @@ export default function CourseDetailPage() {
         </Link>
 
         <div className="bg-white border border-gray-200 rounded-xl p-6">
-          <div className="flex justify-between items-start mb-4">
-            <div>
+          <div className="flex justify-between items-start gap-4 mb-4">
+            <div className="min-w-0 flex-1">
               <span className="text-xs font-semibold bg-blue-100 text-blue-700 px-2 py-1 rounded-full">
                 {course.code}
               </span>
@@ -133,9 +134,12 @@ export default function CourseDetailPage() {
                 {course.department}
               </p>
             </div>
-            <div className="text-right">
-              <div className="text-4xl font-bold text-blue-600">{course.rating.toFixed(1)}</div>
-              <div className="text-xs text-gray-400">/ 5.0 rating</div>
+            <div className="flex shrink-0 items-start gap-3">
+              <BookmarkButton courseId={course.id} />
+              <div className="text-right">
+                <div className="text-4xl font-bold text-blue-600">{course.rating.toFixed(1)}</div>
+                <div className="text-xs text-gray-400">/ 5.0 rating</div>
+              </div>
             </div>
           </div>
 
