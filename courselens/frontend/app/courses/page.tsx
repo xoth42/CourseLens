@@ -1,11 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase/client";
+import CourseSummaryCard, { type CourseListItem } from "@/components/CourseSummaryCard";
 import RequestCourseModal from "@/components/RequestCourseModal";
 
-type Course = {
+type Course = CourseListItem & {
   id: number;
   code: string;
   name: string;
@@ -14,26 +14,85 @@ type Course = {
   difficulty: number;
   reviews: number;
   department: string;
+  college: string | null;
 };
 
-const MOCK_COURSES: Course[] = [
-  { id: 1, code: "CS 320",   name: "Software Engineering",       professor: "Dr. Lehr",       rating: 4.1, difficulty: 3.2, reviews: 45, department: "Computer Science" },
-  { id: 2, code: "CS 311",   name: "Algorithms",                 professor: "Dr. Barrington", rating: 3.8, difficulty: 4.5, reviews: 62, department: "Computer Science" },
-  { id: 3, code: "CS 230",   name: "Computer Systems",           professor: "Dr. Croft",      rating: 4.3, difficulty: 4.0, reviews: 38, department: "Computer Science" },
-  { id: 4, code: "MATH 235", name: "Linear Algebra",             professor: "Dr. Havens",     rating: 4.0, difficulty: 3.8, reviews: 55, department: "Mathematics" },
-  { id: 5, code: "CS 326",   name: "Web Programming",            professor: "Dr. Richards",   rating: 4.5, difficulty: 2.8, reviews: 71, department: "Computer Science" },
-  { id: 6, code: "MATH 331", name: "Ordinary Differential Eqs.", professor: "Dr. Pedit",      rating: 3.6, difficulty: 4.2, reviews: 29, department: "Mathematics" },
+// Maps raw SPIRE college names to short user-facing labels for the dropdown.
+// Strip "College of" / "School of" prefixes and named honorifics (Manning, Isenberg).
+const COLLEGE_DISPLAY: Record<string, string> = {
+  "College of Education":                              "Education",
+  "College of Engineering":                            "Engineering",
+  "College of Humanities & Fine Arts":                 "Humanities & Fine Arts",
+  "College of Natural Sciences":                       "Natural Sciences",
+  "College of Social & Behavioral Sciences":           "Social & Behavioral Sciences",
+  "Isenberg School of Management":                     "Management",
+  "Manning College of Information & Computer Sciences": "Information & Computer Sciences",
+  "School of Nursing":                                 "Nursing",
+  "School of Public Health & Health Sciences":         "Public Health & Health Sciences",
+  "Other Credit Offerings":                            "Other",
+  "Non-Credit Offerings (thru CE)":                    "Other",
+  "Equivalency (Pseudo) Courses":                      "Other",
+};
+
+function collegeLabel(raw: string): string {
+  return COLLEGE_DISPLAY[raw] ?? raw;
+}
+
+// Common abbreviations students use that differ significantly from SPIRE subject codes.
+// Order matters: longer abbreviations must come before shorter prefixes (e.g. "stats" before "stat").
+const SUBJECT_SHORTHANDS: [abbr: string, full: string][] = [
+  ["cs",    "compsci"],   // CS → COMPSCI
+  ["ece",   "e&c-eng"],   // ECE → Electrical & Computer Engineering
+  ["bme",   "bmed-eng"],  // BME → Biomedical Engineering
+  ["stats", "statistc"],  // stats → STATISTC (odd SPIRE code)
+  ["stat",  "statistc"],  // stat  → STATISTC
+  ["mie",   "m&i-eng"],   // MIE  → Mechanical & Industrial Engineering
 ];
+
+// Returns [original, expanded?].
+// e.g. "cs230" → ["cs230", "compsci 230"]
+//      "ece"   → ["ece",   "e&c-eng"]
+//      "math"  → ["math"]  (no shorthand, original only)
+function expandSearch(raw: string): string[] {
+  const q = raw.trim().toLowerCase();
+  const terms: string[] = [q];
+  for (const [abbr, full] of SUBJECT_SHORTHANDS) {
+    if (q.startsWith(abbr)) {
+      const rest = q.slice(abbr.length);
+      // Insert a space when the shorthand runs directly into a digit (cs230 → compsci 230)
+      const expanded = full + (/^\d/.test(rest) ? " " : "") + rest;
+      terms.push(expanded);
+      break;
+    }
+  }
+  return terms;
+}
+
+// Higher score = better match. Used to sort results after filtering.
+//   3 — expanded shorthand term matches at the START of the course code (cs2 → compsci 2xx)
+//   2 — original term matches at the START of the course code
+//   1 — any term appears anywhere in the course code (incidental substring, e.g. "physics 2xx" for "cs 2")
+//   0 — match is only in the course name or professor field
+function scoreMatch(course: Course, terms: string[]): number {
+  const lCode = course.code.toLowerCase();
+  const expanded = terms[1]; // undefined when no shorthand applies
+  if (expanded && lCode.startsWith(expanded)) return 3;
+  if (lCode.startsWith(terms[0])) return 2;
+  if (terms.some((t) => lCode.includes(t))) return 1;
+  return 0;
+}
 
 export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [department, setDepartment] = useState("All");
-  const [professor, setProfessor] = useState("All");
-  const [filterType, setFilterType] = useState<"department" | "professor">("department");
-  const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const [college, setCollege] = useState("");
+  const [department, setDepartment] = useState("");
+  const [courseLevels, setCourseLevels] = useState<Set<number>>(new Set());
+  const [courseLevelsOpen, setCourseLevelsOpen] = useState(false);
+  const [sortBy, setSortBy] = useState<"" | "code-asc" | "code-desc">("");
   const [requestModalOpen, setRequestModalOpen] = useState(false);
+
 
   useEffect(() => {
     async function fetchCourses() {
@@ -44,23 +103,100 @@ export default function CoursesPage() {
     fetchCourses();
   }, []);
 
-  const departments = ["All", ...new Set(courses.map((c) => c.department))];
-  const professors = ["All", ...new Set(courses.map((c) => c.professor))];
+  function getCourseNumber(code: string): number {
+    const match = code.match(/\d+/);
+    return match ? parseInt(match[0]) : 0;
+  }
 
-  const filteredCourses = courses.filter((course) => {
-    const matchesSearch =
-      course.name.toLowerCase().includes(search.toLowerCase()) ||
-      course.code.toLowerCase().includes(search.toLowerCase()) ||
-      course.professor.toLowerCase().includes(search.toLowerCase());
+  // Extract course level from course code (e.g., "CS230" → 200)
+  function getCourseLevel(code: string): number | null {
+    const match = code.match(/\d+/);
+    if (!match) return null;
+    const num = parseInt(match[0]);
+    if (num < 100) return null;
+    if (num < 200) return 100;
+    if (num < 300) return 200;
+    if (num < 400) return 300;
+    if (num < 500) return 400;
+    if (num < 600) return 500;
+    return 600;
+  }
 
-    const matchesDepartment = filterType !== "department" || department === "All" || course.department === department;
-    const matchesProfessor = filterType !== "professor" || professor === "All" || course.professor === professor;
+  // Get available course levels from current courses
+  const availableCourseLevels = Array.from(
+    new Set(
+      courses
+        .map((c) => getCourseLevel(c.code))
+        .filter((level): level is number => level !== null)
+    )
+  ).sort((a, b) => a - b);
+  const collegeOptions = Array.from(
+    new Set(
+      courses
+        .map((c) => (c.college ? collegeLabel(c.college) : null))
+        .filter((c): c is string => c !== null)
+    )
+  ).sort();
 
-    return matchesSearch && matchesDepartment && matchesProfessor;
-  });
+  const departmentOptions = Array.from(
+    new Set(
+      courses
+        .filter((c) => college === "" || (c.college !== null && collegeLabel(c.college) === college))
+        .map((c) => c.department)
+    )
+  ).sort();
 
-  const filterLabel = filterType === "professor" ? "Professor" : "Department";
+  function handleCollegeChange(next: string) {
+    setCollege(next);
+    setDepartment("");
+  }
 
+  const searchTerms = search.trim() ? expandSearch(search) : [];
+
+  const filteredCourses = courses
+    .filter((course) => {
+      const lName = course.name.toLowerCase();
+      const lCode = course.code.toLowerCase();
+      const lProf = course.professor.toLowerCase();
+      const matchesSearch =
+        !search.trim() ||
+        searchTerms.some((term) =>
+          lName.includes(term) || lCode.includes(term) || lProf.includes(term)
+        );
+
+      const matchesCollege =
+        college === "" || (course.college !== null && collegeLabel(course.college) === college);
+
+      const matchesDepartment =
+        department === "" || course.department === department;
+
+      const courseLevel = getCourseLevel(course.code);
+      const matchesLevel =
+        courseLevels.size === 0 || (courseLevel !== null && courseLevels.has(courseLevel));
+
+      return matchesSearch && matchesCollege && matchesDepartment && matchesLevel;
+    })
+    .sort((a, b) => {
+      if (sortBy === "code-asc") return getCourseNumber(a.code) - getCourseNumber(b.code);
+      if (sortBy === "code-desc") return getCourseNumber(b.code) - getCourseNumber(a.code);
+      if (!search.trim()) return 0;
+      return scoreMatch(b, searchTerms) - scoreMatch(a, searchTerms);
+    });
+
+  function toggleCourseLevel(level: number) {
+    const newLevels = new Set(courseLevels);
+    if (newLevels.has(level)) {
+      newLevels.delete(level);
+    } else {
+      newLevels.add(level);
+    }
+    setCourseLevels(newLevels);
+  }
+
+  function getLevelLabel(level: number): string {
+    if (level === 600) return "600+";
+    return `${level}`;
+  }
   return (
     <div className="min-h-full flex-1 bg-gray-50">
       <main className="mx-auto max-w-4xl px-4 py-8">
@@ -77,67 +213,88 @@ export default function CoursesPage() {
 
         <RequestCourseModal open={requestModalOpen} onClose={() => setRequestModalOpen(false)} />
 
-        <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <div className="flex flex-col sm:flex-row gap-3 mb-4 flex-wrap">
           <input
             type="text"
             placeholder="Search by name, code, or professor..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="flex-1 min-w-48 border border-gray-300 rounded-lg px-4 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-
-          <div className="relative">
-            <button
-              onClick={() => setShowFilterMenu(!showFilterMenu)}
-              className="flex items-center gap-2 border border-gray-300 rounded-lg px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-            >
-              {filterLabel} ▾
-            </button>
-
-            {showFilterMenu && (
-              <div className="absolute right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 p-3 w-52">
-                <p className="text-xs text-gray-700 mb-2 font-medium">Filter by</p>
-                <button
-                  onClick={() => { setFilterType("department"); setShowFilterMenu(false); }}
-                  className="w-full text-left text-sm px-3 py-2 rounded hover:bg-gray-100 text-gray-800"
-                >
-                  Department
-                </button>
-                <button
-                  onClick={() => { setFilterType("professor"); setShowFilterMenu(false); }}
-                  className="w-full text-left text-sm px-3 py-2 rounded hover:bg-gray-100 text-gray-800"
-                >
-                  Professor
-                </button>
-              </div>
-            )}
-          </div>
-
-          {filterType === "department" && (
-            <select
-              value={department}
-              onChange={(e) => setDepartment(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none"
-            >
-              {departments.map((dept) => (
-                <option key={dept} value={dept}>{dept}</option>
-              ))}
-            </select>
-          )}
-
-          {filterType === "professor" && (
-            <select
-              value={professor}
-              onChange={(e) => setProfessor(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none"
-            >
-              {professors.map((prof) => (
-                <option key={prof} value={prof}>{prof}</option>
-              ))}
-            </select>
-          )}
+          <select
+            value={college}
+            onChange={(e) => handleCollegeChange(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none"
+          >
+            <option value="">Select College</option>
+            {collegeOptions.map((col) => (
+              <option key={col} value={col}>{col}</option>
+            ))}
+          </select>
+          <select
+            value={department}
+            onChange={(e) => setDepartment(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none"
+          >
+            <option value="">Select Department</option>
+            {departmentOptions.map((dept) => (
+              <option key={dept} value={dept}>{dept}</option>
+            ))}
+          </select>
         </div>
 
+        {/* Sort Controls */}
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-sm text-gray-500 font-medium">Sort:</span>
+          <button
+            onClick={() => setSortBy(sortBy === "code-asc" ? "" : "code-asc")}
+            className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
+              sortBy === "code-asc"
+                ? "bg-blue-600 text-white border-blue-600"
+                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+            }`}
+          >
+            Code ↑
+          </button>
+          <button
+            onClick={() => setSortBy(sortBy === "code-desc" ? "" : "code-desc")}
+            className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
+              sortBy === "code-desc"
+                ? "bg-blue-600 text-white border-blue-600"
+                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+            }`}
+          >
+            Code ↓
+          </button>
+        </div>
+
+        {/* Course Level Filter Section */}
+        <div className="border-b border-gray-200 mb-4">
+          <button
+            onClick={() => setCourseLevelsOpen(!courseLevelsOpen)}
+            className="w-full flex justify-between items-center py-3 px-0 text-left font-semibold text-gray-800 hover:text-gray-600 transition-colors"
+          >
+            <span>Course Level</span>
+            <span className="text-xl">{courseLevelsOpen ? "−" : "+"}</span>
+          </button>
+          {courseLevelsOpen && (
+            <div className="pb-3 flex flex-wrap gap-2">
+              {availableCourseLevels.map((level) => (
+                <button
+                  key={level}
+                  onClick={() => toggleCourseLevel(level)}
+                  className={`px-3 py-2 text-sm font-medium border rounded transition-colors ${
+                    courseLevels.has(level)
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+                  }`}
+                >
+                  {getLevelLabel(level)}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <p className="text-sm text-gray-400 mb-4">
           {loading ? "Loading..." : `${filteredCourses.length} course${filteredCourses.length !== 1 ? "s" : ""} found`}
         </p>
@@ -149,38 +306,11 @@ export default function CoursesPage() {
             <p className="text-center text-gray-400 py-16">No courses match your search.</p>
           ) : (
             filteredCourses.map((course) => (
-              <CourseCard key={course.id} course={course} />
+              <CourseSummaryCard key={course.id} course={course} />
             ))
           )}
         </div>
       </main>
     </div>
-  );
-}
-
-function CourseCard({ course }: { course: Course }) {
-  return (
-    <Link href={`/courses/${course.id}`}>
-      <div className="bg-white border border-gray-200 rounded-xl p-5 hover:shadow-md transition-shadow cursor-pointer">
-        <div className="flex justify-between items-start">
-          <div>
-            <span className="text-xs font-semibold bg-blue-100 text-blue-700 px-2 py-1 rounded-full">
-              {course.code}
-            </span>
-            <h3 className="text-lg font-semibold text-gray-900 mt-2">{course.name}</h3>
-            <p className="text-sm text-gray-500">{course.professor}</p>
-          </div>
-          <div className="text-right">
-            <div className="text-2xl font-bold text-blue-600">{course.rating.toFixed(1)}</div>
-            <div className="text-xs text-gray-400">/ 5.0</div>
-          </div>
-        </div>
-        <div className="flex gap-6 mt-4 text-sm text-gray-500">
-          <span>Difficulty: <strong>{course.difficulty.toFixed(1)}/5</strong></span>
-          <span>{course.reviews} reviews</span>
-          <span>{course.department}</span>
-        </div>
-      </div>
-    </Link>
   );
 }
