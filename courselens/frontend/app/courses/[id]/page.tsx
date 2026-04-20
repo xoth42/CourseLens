@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../../../lib/supabase/client";
 import type { Course, Review } from "../../../types/course";
 
@@ -20,6 +20,52 @@ function gpaToLetter(gpa: number): string {
   return "D";
 }
 
+function normalizeGrade(grade: string | null): string | null {
+  if (!grade) return null;
+  const cleaned = grade.trim().toUpperCase();
+  const allowed = ["A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "F"];
+  return allowed.includes(cleaned) ? cleaned : null;
+}
+
+function gradeToPoints(letter: string): number {
+  switch (letter) {
+    case "A": return 4.0;
+    case "A-": return 3.7;
+    case "B+": return 3.3;
+    case "B": return 3.0;
+    case "B-": return 2.7;
+    case "C+": return 2.3;
+    case "C": return 2.0;
+    case "C-": return 1.7;
+    case "D+": return 1.3;
+    case "D": return 1.0;
+    default: return 0.0;
+  }
+}
+
+function semesterSortValue(semester: string): number {
+  const match = semester.match(/(Spring|Summer|Fall)\s+(\d{4})/i);
+  if (!match) return 0;
+
+  const term = match[1].toLowerCase();
+  const year = Number(match[2]);
+
+  let termValue = 0;
+  if (term === "spring") termValue = 1;
+  if (term === "summer") termValue = 2;
+  if (term === "fall") termValue = 3;
+
+  return year * 10 + termValue;
+}
+
+function gpaTickLabel(gpa: number): string {
+  if (gpa === 4) return "4.0 (A)";
+  if (gpa === 3) return "3.0 (B)";
+  if (gpa === 2) return "2.0 (C)";
+  if (gpa === 1) return "1.0 (D)";
+  return "0.0 (F)";
+}
+
 export default function CourseDetailPage() {
   const { id } = useParams();
   const [course, setCourse] = useState<Course | null>(null);
@@ -27,6 +73,7 @@ export default function CourseDetailPage() {
   const [loading, setLoading] = useState(true);
   const [alreadyReviewed, setAlreadyReviewed] = useState(false);
   const [showPopup, setShowPopup] = useState(false);
+  const [selectedGraph, setSelectedGraph] = useState("distribution");
 
   useEffect(() => {
     async function fetchData() {
@@ -83,6 +130,111 @@ export default function CourseDetailPage() {
       </div>
     );
   }
+  
+  const gradeDistribution = useMemo(() => {
+    const buckets: Record<string, number> = {
+      A: 0, "A-": 0, "B+": 0, B: 0, "B-": 0,
+      "C+": 0, C: 0, "C-": 0, "D+": 0, D: 0, F: 0
+    };
+  
+    reviews.forEach((r) => {
+      const g = r.grade?.toUpperCase();
+      if (g && buckets[g] !== undefined) buckets[g]++;
+    });
+  
+    return buckets;
+  }, [reviews]);
+  
+  const maxGradeCount = Math.max(...Object.values(gradeDistribution), 1);
+  
+  const gradeOverTime = useMemo(() => {
+    const map: Record<string, number[]> = {};
+  
+    reviews.forEach((r) => {
+      if (!r.semester || !r.grade) return;
+  
+      const g = normalizeGrade(r.grade);
+      if (!g) return;
+  
+      if (!map[r.semester]) map[r.semester] = [];
+      map[r.semester].push(gradeToPoints(g));
+    });
+  
+    return Object.entries(map)
+      .map(([semester, values]) => ({
+        label: semester,
+        value: values.reduce((a, b) => a + b, 0) / values.length,
+      }))
+      .sort((a, b) => semesterSortValue(a.label) - semesterSortValue(b.label));
+  }, [reviews]);
+  
+  const gradeByInstructor = useMemo(() => {
+    const map: Record<string, number[]> = {};
+  
+    reviews.forEach((r) => {
+      if (!r.professor_name || !r.grade) return;
+  
+      const g = normalizeGrade(r.grade);
+      if (!g) return;
+  
+      if (!map[r.professor_name]) map[r.professor_name] = [];
+      map[r.professor_name].push(gradeToPoints(g));
+    });
+  
+    return Object.entries(map).map(([prof, values]) => ({
+      label: prof,
+      value: values.reduce((a, b) => a + b, 0) / values.length,
+    }));
+  }, [reviews]);
+  
+  const hoursBuckets = useMemo(() => {
+    const buckets = {
+      "0-5": 0,
+      "6-10": 0,
+      "11-15": 0,
+      "16-20": 0,
+      "21+": 0,
+    };
+  
+    reviews.forEach((r) => {
+      const h = r.hours_per_week;
+      if (!h) return;
+  
+      if (h <= 5) buckets["0-5"]++;
+      else if (h <= 10) buckets["6-10"]++;
+      else if (h <= 15) buckets["11-15"]++;
+      else if (h <= 20) buckets["16-20"]++;
+      else buckets["21+"]++;
+    });
+  
+    return Object.entries(buckets).map(([label, value]) => ({
+      label,
+      value,
+    }));
+  }, [reviews]);
+  
+  const maxHoursCount = Math.max(...hoursBuckets.map((b) => b.value), 1);
+  
+  const difficultyGrade = useMemo(() => {
+    const map: Record<string, number[]> = {};
+  
+    reviews.forEach((r) => {
+      if (!r.grade) return;
+  
+      const g = normalizeGrade(r.grade);
+      if (!g) return;
+  
+      const key = Math.round(r.difficulty).toString();
+  
+      if (!map[key]) map[key] = [];
+      map[key].push(gradeToPoints(g));
+    });
+  
+    return Object.entries(map).map(([diff, values]) => ({
+      label: diff,
+      value: values.reduce((a, b) => a + b, 0) / values.length,
+    }));
+  }, [reviews]);
 
   return (
     <div className="min-h-full flex-1 bg-gray-50">
@@ -152,6 +304,395 @@ export default function CourseDetailPage() {
               <div className="text-sm text-gray-500">Avg. Grade</div>
             </div>
           </div>
+        </div>
+        <div className="mt-10 bg-white border border-gray-200 rounded-xl p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-lg font-semibold text-gray-800">Course Analytics</h3>
+
+            <select
+              value={selectedGraph}
+              onChange={(e) => setSelectedGraph(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="distribution">Grade Distribution</option>
+              <option value="over-time">Grade Over Time</option>
+              <option value="per-instructor">Grade per Instructor</option>
+              <option value="hours">Time Spent per Week</option>
+              <option value="difficulty-grade">Difficulty vs Grade</option>
+            </select>
+          </div>
+
+          {selectedGraph === "distribution" && (
+            <div className="w-full overflow-x-auto">
+              <svg width="100%" height="280" viewBox="0 0 520 280">
+                <line x1="50" y1="20" x2="50" y2="220" stroke="#ccc" />
+                <line x1="50" y1="220" x2="500" y2="220" stroke="#ccc" />
+
+                {Object.entries(gradeDistribution).map(([grade, count], i) => {
+                  const barWidth = 28;
+                  const gap = 10;
+                  const x = 60 + i * (barWidth + gap);
+                  const barHeight = maxGradeCount === 0 ? 0 : (count / maxGradeCount) * 170;
+                  const y = 220 - barHeight;
+
+                  return (
+                    <g key={grade}>
+                      <rect
+                        x={x}
+                        y={y}
+                        width={barWidth}
+                        height={barHeight}
+                        fill="#2563eb"
+                        rx="4"
+                      />
+                      <text
+                        x={x + barWidth / 2}
+                        y={240}
+                        fontSize="10"
+                        textAnchor="middle"
+                        fill="#555"
+                      >
+                        {grade}
+                      </text>
+                      <text
+                        x={x + barWidth / 2}
+                        y={y - 6}
+                        fontSize="10"
+                        textAnchor="middle"
+                        fill="#333"
+                      >
+                        {count}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {Array.from({ length: maxGradeCount + 1 }, (_, tick) => {
+                  const y = 220 - (tick / Math.max(maxGradeCount, 1)) * 170;
+                  return (
+                    <g key={tick}>
+                      <line x1="45" y1={y} x2="50" y2={y} stroke="#999" />
+                      <text x="35" y={y + 4} fontSize="10" textAnchor="middle">
+                        {tick}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                <text x="275" y="265" textAnchor="middle" fontSize="12">
+                  Grade
+                </text>
+
+                <text
+                  x="15"
+                  y="130"
+                  textAnchor="middle"
+                  fontSize="12"
+                  transform="rotate(-90 15,130)"
+                >
+                  Number of Students
+                </text>
+              </svg>
+            </div>
+          )}
+
+          {selectedGraph === "over-time" && (
+            <div className="w-full overflow-x-auto">
+              <svg width="100%" height="260" viewBox="0 0 560 260">
+                <line x1="70" y1="20" x2="70" y2="180" stroke="#ccc" />
+                <line x1="70" y1="180" x2="520" y2="180" stroke="#ccc" />
+
+                {[0, 1, 2, 3, 4].map((tick) => {
+                  const y = 180 - (tick / 4) * 160;
+                  return (
+                    <g key={tick}>
+                      <line x1="65" y1={y} x2="70" y2={y} stroke="#999" />
+                      <text x="55" y={y + 4} fontSize="10" textAnchor="end" fill="#555">
+                        {gpaTickLabel(tick)}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                <polyline
+                  fill="none"
+                  stroke="#3b82f6"
+                  strokeWidth="3"
+                  points={gradeOverTime
+                    .map((item, i) => {
+                      const x = 70 + i * (450 / Math.max(gradeOverTime.length - 1, 1));
+                      const y = 180 - (item.value / 4) * 160;
+                      return `${x},${y}`;
+                    })
+                    .join(" ")}
+                />
+
+                {gradeOverTime.map((item, i) => {
+                  const x = 70 + i * (450 / Math.max(gradeOverTime.length - 1, 1));
+                  const y = 180 - (item.value / 4) * 160;
+
+                  return <circle key={i} cx={x} cy={y} r="4" fill="#2563eb" />;
+                })}
+
+                {gradeOverTime.map((item, i) => {
+                  const x = 70 + i * (450 / Math.max(gradeOverTime.length - 1, 1));
+
+                  return (
+                    <text
+                      key={i}
+                      x={x}
+                      y={205}
+                      fontSize="10"
+                      textAnchor="middle"
+                      fill="#555"
+                    >
+                      {item.label}
+                    </text>
+                  );
+                })}
+
+                <text x="295" y="235" textAnchor="middle" fontSize="12">
+                  Semester
+                </text>
+
+                <text
+                  x="18"
+                  y="100"
+                  textAnchor="middle"
+                  fontSize="12"
+                  transform="rotate(-90 18,100)"
+                >
+                  Average Grade (GPA)
+                </text>
+              </svg>
+            </div>
+          )}
+
+          {selectedGraph === "per-instructor" && (
+            <div className="w-full overflow-x-auto">
+              <svg width="100%" height="340" viewBox="0 0 620 340">
+                <line x1="70" y1="20" x2="70" y2="220" stroke="#ccc" />
+                <line x1="70" y1="220" x2="580" y2="220" stroke="#ccc" />
+
+                {[0, 1, 2, 3, 4].map((tick) => {
+                  const y = 220 - (tick / 4) * 170;
+                  return (
+                    <g key={tick}>
+                      <line x1="65" y1={y} x2="70" y2={y} stroke="#999" />
+                      <text x="55" y={y + 4} fontSize="10" textAnchor="end" fill="#555">
+                        {gpaTickLabel(tick)}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {gradeByInstructor.map((item, i) => {
+                  const barWidth = 40;
+                  const gap = 30;
+                  const totalWidth = gradeByInstructor.length * (barWidth + gap) - gap;
+                  const startX = (620 - totalWidth) / 2;
+                  const x = startX + i * (barWidth + gap);
+                  const barHeight = (item.value / 4) * 170;
+                  const y = 220 - barHeight;
+
+                  return (
+                    <g key={item.label}>
+                      <rect
+                        x={x}
+                        y={y}
+                        width={barWidth}
+                        height={barHeight}
+                        fill="#2563eb"
+                        rx="4"
+                      />
+
+                      <text
+                        x={x + barWidth / 2}
+                        y={y - 8}
+                        fontSize="10"
+                        textAnchor="middle"
+                        fill="#333"
+                      >
+                        {item.value.toFixed(2)} ({gpaToLetter(item.value)})
+                      </text>
+
+                      <text
+                        x={x + barWidth / 2}
+                        y={250}
+                        fontSize="10"
+                        textAnchor="end"
+                        transform={`rotate(-45 ${x + barWidth / 2},250)`}
+                        fill="#555"
+                      >
+                        {item.label}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                <text x="325" y="315" textAnchor="middle" fontSize="12">
+                  Instructor
+                </text>
+
+                <text
+                  x="18"
+                  y="120"
+                  textAnchor="middle"
+                  fontSize="12"
+                  transform="rotate(-90 18,120)"
+                >
+                  Average Grade (GPA)
+                </text>
+              </svg>
+            </div>
+          )}
+
+          {selectedGraph === "hours" && (
+            <div className="w-full overflow-x-auto">
+              <svg width="100%" height="280" viewBox="0 0 520 280">
+                <line x1="50" y1="20" x2="50" y2="220" stroke="#ccc" />
+                <line x1="50" y1="220" x2="500" y2="220" stroke="#ccc" />
+
+                {(() => {
+                  const barWidth = 40;
+                  const gap = 15;
+
+                  const totalWidth = hoursBuckets.length * (barWidth + gap) - gap;
+                  const startX = (520 - totalWidth) / 2;
+
+                  return hoursBuckets.map((item, i) => {
+                    const x = startX + i * (barWidth + gap);
+                    const barHeight =
+                      maxHoursCount === 0
+                        ? 0
+                        : (item.value / maxHoursCount) * 170;
+                    const y = 220 - barHeight;
+
+                    return (
+                      <g key={item.label}>
+                        <rect
+                          x={x}
+                          y={y}
+                          width={barWidth}
+                          height={barHeight}
+                          fill="#10b981"
+                          rx="4"
+                        />
+                        <text
+                          x={x + barWidth / 2}
+                          y={240}
+                          fontSize="10"
+                          textAnchor="middle"
+                          fill="#555"
+                        >
+                          {item.label}
+                        </text>
+                        <text
+                          x={x + barWidth / 2}
+                          y={y - 6}
+                          fontSize="10"
+                          textAnchor="middle"
+                          fill="#333"
+                        >
+                          {item.value}
+                        </text>
+                      </g>
+                    );
+                  });
+                })()}
+
+                {Array.from({ length: maxHoursCount + 1 }, (_, tick) => {
+                  const y = 220 - (tick / Math.max(maxHoursCount, 1)) * 170;
+                  return (
+                    <g key={tick}>
+                      <line x1="45" y1={y} x2="50" y2={y} stroke="#999" />
+                      <text x="35" y={y + 4} fontSize="10" textAnchor="middle">
+                        {tick}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                <text x="275" y="265" textAnchor="middle" fontSize="12">
+                  Hours per Week
+                </text>
+
+                <text
+                  x="15"
+                  y="130"
+                  textAnchor="middle"
+                  fontSize="12"
+                  transform="rotate(-90 15,130)"
+                >
+                  Number of Students
+                </text>
+              </svg>
+            </div>
+          )}
+
+          {selectedGraph === "difficulty-grade" && (
+            <div className="w-full overflow-x-auto">
+              <svg width="100%" height="260" viewBox="0 0 500 260">
+
+                <line x1="50" y1="20" x2="50" y2="200" stroke="#ccc" />
+                <line x1="50" y1="200" x2="480" y2="200" stroke="#ccc" />
+
+                {reviews.map((r, i) => {
+                  if (!r.grade) return null;
+
+                  const g = normalizeGrade(r.grade);
+                  if (!g) return null;
+
+                  const x = 50 + ((r.difficulty - 1) / 4) * 430;
+                  const y = 200 - (gradeToPoints(g) / 4) * 180;
+
+                  return (
+                    <circle
+                      key={i}
+                      cx={x}
+                      cy={y}
+                      r="4"
+                      fill="#ef4444"
+                      opacity="0.7"
+                    />
+                  );
+                })}
+
+                {[1, 2, 3, 4, 5].map((d) => {
+                  const x = 50 + ((d - 1) / 4) * 430;
+                  return (
+                    <text key={d} x={x} y={220} fontSize="10" textAnchor="middle">
+                      {d}
+                    </text>
+                  );
+                })}
+
+                {[0, 1, 2, 3, 4].map((g) => {
+                  const y = 200 - (g / 4) * 180;
+                  return (
+                    <text key={g} x={25} y={y + 3} fontSize="10">
+                      {g}
+                    </text>
+                  );
+                })}
+
+                <text x="250" y="250" textAnchor="middle" fontSize="12">
+                  Difficulty
+                </text>
+
+                <text
+                  x="10"
+                  y="120"
+                  textAnchor="middle"
+                  fontSize="12"
+                  transform="rotate(-90 10,120)"
+                >
+                  Grade in Class
+                </text>
+
+              </svg>
+            </div>
+          )}
         </div>
 
         {/* Reviews section */}
