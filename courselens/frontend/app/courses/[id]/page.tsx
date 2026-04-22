@@ -130,6 +130,19 @@ export default function CourseDetailPage() {
     fetchData();
   }, [id]);
 
+  async function fetchAiOverview() {
+    setAiLoading(true);
+    try {
+      const res = await fetch(`/api/ai-overview?courseId=${id}`);
+      const json = await res.json();
+      if (json.error) console.error("AI overview error:", json.error);
+      setAiOverview(json.overview ?? null);
+    } catch (err) {
+      console.error("fetchAiOverview failed:", err);
+    }
+    setAiLoading(false);
+  }
+
   async function handleReplySubmit(reviewId: number, content: string, parentReplyId?: number) {
     if (!currentProfileId) return;
     const { data } = await supabase
@@ -720,6 +733,29 @@ export default function CourseDetailPage() {
 
               </svg>
             </div>
+          )}
+        </div>
+
+        {/* AI Overview */}
+        <div className="mt-6 bg-white border border-blue-100 rounded-xl p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-gray-800">✦ AI Overview</span>
+              <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">AI</span>
+            </div>
+            {!aiOverview && !aiLoading && (
+              <button
+                onClick={fetchAiOverview}
+                className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700"
+              >
+                Generate
+              </button>
+            )}
+          </div>
+          {aiLoading && <p className="text-sm text-gray-400">Summarizing reviews...</p>}
+          {aiOverview && <p className="text-sm text-gray-700 leading-relaxed">{aiOverview}</p>}
+          {!aiOverview && !aiLoading && (
+            <p className="text-sm text-gray-400">Click Generate to get an AI summary of all reviews.</p>
           )}
         </div>
 
