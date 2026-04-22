@@ -66,6 +66,10 @@ export default function Profile() {
                     <div className="text-sm text-gray-500 text-left">{email}</div>
                 </div>
 
+                <Link href="/bookmarks" className="flex text-sm text-[#2868ce] mt-4 no-underline hover:text-[#1a50a7] transition">
+                       Bookmarked Courses
+                   </Link>
+
                 <p className="text-sm text-black text-left mt-4">Past Reviews:</p>
 
                 <div>
@@ -128,7 +132,7 @@ export default function Profile() {
                 </div>
 
                 <button className=" flex text-[#2868ce] text-xs mt-4 hover:text-[#1a50a7] transition" onClick={() => setVis(!reviewVis)}>
-                    {reviewVis? 'Hide All Past Reviews': 'See All Past Reviews'}</button>
+                    {reviewVis? 'Hide': 'See All Past Reviews'}</button>
                     {reviewVis && (
                     <section>
                         <div>
