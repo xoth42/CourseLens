@@ -1,13 +1,12 @@
 "use client";
 
-import { useParams } from "next/navigation";
-import Link from "next/link";
-import { useState, useEffect, useMemo } from "react";
+import { AiSummary } from "@/app/api/ai-overview/route";
 import BookmarkButton from "@/components/BookmarkButton";
-import { gpaToLetter } from "@/lib/gpa";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase/client";
-import type { Course, Review, Reply } from "../../../types/course";
-import type { AiSummary } from "../../api/ai-overview/route";
+import type { Course, Reply, Review } from "../../../types/course";
 
 function gpaToLetter(gpa: number): string {
   if (gpa === 0) return "N/A";
