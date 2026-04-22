@@ -77,6 +77,8 @@ export default function CourseDetailPage() {
   const [alreadyReviewed, setAlreadyReviewed] = useState(false);
   const [showPopup, setShowPopup] = useState(false);
   const [selectedGraph, setSelectedGraph] = useState("distribution");
+  const [aiOverview, setAiOverview] = useState<string | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
 
   useEffect(() => {
     async function fetchData() {
@@ -153,22 +155,6 @@ export default function CourseDetailPage() {
     if (data) setReplies((prev) => [...prev, data]);
   }
 
-  if (loading) {
-    return (
-      <div className="flex min-h-[50vh] flex-1 items-center justify-center bg-gray-50">
-        <p className="text-gray-500">Loading...</p>
-      </div>
-    );
-  }
-
-  if (!course) {
-    return (
-      <div className="flex min-h-[50vh] flex-1 items-center justify-center bg-gray-50">
-        <p className="text-gray-500">Course not found.</p>
-      </div>
-    );
-  }
-  
   const gradeDistribution = useMemo(() => {
     const buckets: Record<string, number> = {
       A: 0, "A-": 0, "B+": 0, B: 0, "B-": 0,
@@ -274,6 +260,22 @@ export default function CourseDetailPage() {
     }));
   }, [reviews]);
 
+  if (loading) {
+    return (
+      <div className="flex min-h-[50vh] flex-1 items-center justify-center bg-gray-50">
+        <p className="text-gray-500">Loading...</p>
+      </div>
+    );
+  }
+
+  if (!course) {
+    return (
+      <div className="flex min-h-[50vh] flex-1 items-center justify-center bg-gray-50">
+        <p className="text-gray-500">Course not found.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-full flex-1 bg-gray-50">
       <main className="mx-auto max-w-4xl px-4 py-8">
@@ -353,7 +355,7 @@ export default function CourseDetailPage() {
             <select
               value={selectedGraph}
               onChange={(e) => setSelectedGraph(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900"
             >
               <option value="distribution">Grade Distribution</option>
               <option value="over-time">Grade Over Time</option>
