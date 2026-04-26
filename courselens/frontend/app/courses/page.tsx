@@ -1,10 +1,15 @@
 "use client";
 
+<<<<<<< HEAD
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase/client";
+=======
+>>>>>>> d92c060 (added filtering methods)
 import CourseSummaryCard, { type CourseListItem } from "@/components/CourseSummaryCard";
 import RequestCourseModal from "@/components/RequestCourseModal";
+import { supabase } from "@/lib/supabase/client";
+import { useEffect, useState } from "react";
 
 type Course = CourseListItem & {
   id: number;
@@ -91,7 +96,7 @@ export default function CoursesPage() {
   const [department, setDepartment] = useState("");
   const [courseLevels, setCourseLevels] = useState<Set<number>>(new Set());
   const [courseLevelsOpen, setCourseLevelsOpen] = useState(false);
-  const [sortBy, setSortBy] = useState<"" | "code-asc" | "code-desc">("");
+  const [sortBy, setSortBy] = useState<"" | "code-asc" | "code-desc" | "a-z" | "z-a" | "rating-asc" | "rating-desc" | "diff-asc" | "diff-desc">("");
   const [requestModalOpen, setRequestModalOpen] = useState(false);
 
 
@@ -180,9 +185,35 @@ export default function CoursesPage() {
     .sort((a, b) => {
       if (sortBy === "code-asc") return getCourseNumber(a.code) - getCourseNumber(b.code);
       if (sortBy === "code-desc") return getCourseNumber(b.code) - getCourseNumber(a.code);
+      if (sortBy === "a-z") return a.code.localeCompare(b.code);
+      if (sortBy === "z-a") return b.code.localeCompare(a.code);
+      if (sortBy === "rating-asc") {
+        if (a.rating === 0 && b.rating !== 0) return 1
+        if (b.rating === 0 && a.rating !== 0) return -1
+        if (a.rating === 0 && b.rating === 0) return 0
+        return a.rating - b.rating;
+      }
+      if (sortBy === "rating-desc") {
+        if (a.rating === 0 && b.rating !== 0) return 1
+        if (b.rating === 0 && a.rating !== 0) return -1
+        if (a.rating === 0 && b.rating === 0) return 0
+        return b.rating - a.rating;
+      }
+      if (sortBy === "diff-asc") {
+        if (a.difficulty === 0 && b.difficulty !== 0) return 1
+        if (b.difficulty === 0 && a.difficulty !== 0) return -1
+        if (a.difficulty === 0 && b.difficulty === 0) return 0
+        return a.difficulty - b.difficulty;
+      }
+      if (sortBy === "diff-desc") {
+        if (a.difficulty === 0 && b.difficulty !== 0) return 1
+        if (b.difficulty === 0 && a.difficulty !== 0) return -1
+        if (a.difficulty === 0 && b.difficulty === 0) return 0
+        return b.difficulty - a.difficulty;
+      }
       if (!search.trim()) return 0;
       return scoreMatch(b, searchTerms) - scoreMatch(a, searchTerms);
-    });
+    })
 
   function toggleCourseLevel(level: number) {
     const newLevels = new Set(courseLevels);
@@ -233,7 +264,7 @@ export default function CoursesPage() {
           <select
             value={college}
             onChange={(e) => handleCollegeChange(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none"
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none hover:border-gray-400"
           >
             <option value="">Select College</option>
             {collegeOptions.map((col) => (
@@ -243,7 +274,7 @@ export default function CoursesPage() {
           <select
             value={department}
             onChange={(e) => setDepartment(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none"
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none hover:border-gray-400"
           >
             <option value="">Select Department</option>
             {departmentOptions.map((dept) => (
@@ -256,24 +287,44 @@ export default function CoursesPage() {
         <div className="flex items-center gap-2 mb-4">
           <span className="text-sm text-gray-500 font-medium">Sort:</span>
           <button
-            onClick={() => setSortBy(sortBy === "code-asc" ? "" : "code-asc")}
+            onClick={() => setSortBy(sortBy === "a-z" ? "z-a" : "a-z")}
             className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
-              sortBy === "code-asc"
+              (sortBy === "a-z" || sortBy === "z-a")
                 ? "bg-blue-600 text-white border-blue-600"
                 : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
             }`}
           >
-            Code ↑
+            {sortBy === "a-z" ? 'A-Z ↓': 'A-Z ↑'} 
           </button>
           <button
-            onClick={() => setSortBy(sortBy === "code-desc" ? "" : "code-desc")}
+            onClick={() => setSortBy(sortBy === "code-asc" ? "code-desc" : "code-asc")}
             className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
-              sortBy === "code-desc"
+              (sortBy === "code-asc" || sortBy === "code-desc")
                 ? "bg-blue-600 text-white border-blue-600"
                 : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
             }`}
           >
-            Code ↓
+            {sortBy === "code-asc" ? 'Code ↓': 'Code ↑'} 
+          </button>
+          <button
+            onClick={() => setSortBy(sortBy === "rating-asc" ? "rating-desc" : "rating-asc")}
+            className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
+              (sortBy === "rating-asc" || sortBy === "rating-desc")
+                ? "bg-blue-600 text-white border-blue-600"
+                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+            }`}
+          >
+            {sortBy === "rating-asc" ? 'Rating ↓': 'Rating ↑'} 
+          </button>
+          <button
+            onClick={() => setSortBy(sortBy === "diff-asc" ? "diff-desc" : "diff-asc")}
+            className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
+              (sortBy === "diff-asc" || sortBy === "diff-desc")
+                ? "bg-blue-600 text-white border-blue-600"
+                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+            }`}
+          >
+            {sortBy === "diff-asc" ? 'Difficulty ↓': 'Difficulty ↑'} 
           </button>
         </div>
 
