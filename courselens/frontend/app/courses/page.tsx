@@ -57,6 +57,7 @@ const SUBJECT_SHORTHANDS: [abbr: string, full: string][] = [
 ];
 
 let lastSort: "" | "a-z" | "code-asc" | "code-desc" | "z-a" | "rating-asc" | "rating-desc" | "diff-asc" | "diff-desc" | "gpa-asc" | "gpa-desc" = "a-z";
+let lastOpt: boolean = false;
 
 // Returns [original, expanded?].
 // e.g. "cs230" → ["cs230", "compsci 230"]
@@ -101,7 +102,7 @@ export default function CoursesPage() {
   const [courseLevelsOpen, setCourseLevelsOpen] = useState(false);
   const [sortBy, setSortBy] = useState<"" | "code-asc" | "code-desc" | "a-z" | "z-a" | "rating-asc" | "rating-desc" | "diff-asc" | "diff-desc" | "gpa-asc" | "gpa-desc">(lastSort);
   const [requestModalOpen, setRequestModalOpen] = useState(false);
-  const [sortVis, setVis] = useState(false);
+  const [sortVis, setVis] = useState(lastOpt);
 
 
   useEffect(() => {
@@ -350,14 +351,57 @@ export default function CoursesPage() {
           >
             {sortBy === "code-asc" || sortBy === "code-desc"? buttonText(sortBy): 'Code'}
           </button>
+          <button
+                  onClick={() => {
+                    setSortBy(sortBy === "rating-asc" ? "rating-desc" : "rating-asc");
+                    lastSort = (sortBy === "rating-asc" ? "rating-desc" : "rating-asc")
+                  }}
+                  className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
+                    (sortBy === "rating-asc" || sortBy === "rating-desc")
+                      ? "bg-blue-600 text-white border-blue-600 hover:border-blue-400"
+                      : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+                  }`}
+                >
+                  {sortBy === "rating-asc" || sortBy === "rating-desc"? buttonText(sortBy): 'Rating'}
+                </button>
+                <button
+                  onClick={() => {
+                    setSortBy(sortBy === "diff-asc" ? "diff-desc" : "diff-asc");
+                    lastSort = (sortBy === "diff-asc" ? "diff-desc" : "diff-asc")
+                  }}
+                  className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
+                    (sortBy === "diff-asc" || sortBy === "diff-desc")
+                      ? "bg-blue-600 text-white border-blue-600 hover:border-blue-400"
+                      : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+                  }`}
+                >
+                  {sortBy === "diff-asc" || sortBy === "diff-desc"? buttonText(sortBy): 'Difficulty'}
+                </button>
+                <button
+                  onClick={() => {
+                    setSortBy(sortBy === "gpa-asc" ? "gpa-desc" : "gpa-asc");
+                    lastSort = (sortBy === "gpa-asc" ? "gpa-desc" : "gpa-asc")
+                  }}
+                  className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
+                    (sortBy === "gpa-asc" || sortBy === "gpa-desc")
+                      ? "bg-blue-600 text-white border-blue-600 hover:border-blue-400"
+                      : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+                  }`}
+                >
+                  {sortBy === "gpa-asc" || sortBy === "gpa-desc"? buttonText(sortBy): 'Avg Grade'}
+                </button>
 
-          <div className="">
-          <button className=" flex text-[#2868ce] text-sm ml-1 mt-1 hover:text-[#1a50a7] transition" onClick={() => setVis(!sortVis)}>
+          {/*}
+          <div>
+          <button className=" flex text-[#2868ce] text-sm ml-0.5 mt-1 hover:text-[#1a50a7] transition" onClick={() => {
+            lastOpt = !sortVis;
+            setVis(!sortVis);
+          }}>
               {sortVis? 'Hide Options': 'More Options'}</button>
           </div>
               {sortVis && (
               <section>
-                <div className="flex gap-2">
+                <div className="flex gap-2 ml-0.5">
                 <button
                   onClick={() => {
                     setSortBy(sortBy === "rating-asc" ? "rating-desc" : "rating-asc");
@@ -400,7 +444,7 @@ export default function CoursesPage() {
                 </div>
               </section>
               )}
-            
+            */}
         </div>
 
         {/* Course Level Filter Section */}
