@@ -6,6 +6,7 @@ import { useState, useEffect, useMemo } from "react";
 import BookmarkButton from "@/components/BookmarkButton";
 import { supabase } from "../../../lib/supabase/client";
 import type { Course, Review, Reply } from "../../../types/course";
+import type { AiSummary } from "../../api/ai-overview/route";
 
 function gpaToLetter(gpa: number): string {
   if (gpa === 0) return "N/A";
@@ -77,8 +78,9 @@ export default function CourseDetailPage() {
   const [alreadyReviewed, setAlreadyReviewed] = useState(false);
   const [showPopup, setShowPopup] = useState(false);
   const [selectedGraph, setSelectedGraph] = useState("distribution");
-  const [aiOverview, setAiOverview] = useState<string | null>(null);
+  const [aiSummary, setAiSummary] = useState<AiSummary | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiTooFew, setAiTooFew] = useState(false);
 
   useEffect(() => {
     async function fetchData() {
@@ -96,6 +98,12 @@ export default function CourseDetailPage() {
         .order("created_at", { ascending: false });
       if (reviewData) {
         setReviews(reviewData);
+        const commentCount = reviewData.filter((r: Review) => r.comment).length;
+        if (commentCount >= 5) {
+          const buckets: Record<string, number> = { A: 0, "A-": 0, "B+": 0, B: 0, "B-": 0, "C+": 0, C: 0, "C-": 0, "D+": 0, D: 0, F: 0 };
+          reviewData.forEach((r: Review) => { const g = r.grade?.toUpperCase(); if (g && buckets[g] !== undefined) buckets[g]++; });
+          fetchAiOverview(reviewData[0]?.created_at, false, buckets);
+        }
         if (reviewData.length > 0) {
           const reviewIds = reviewData.map((r: Review) => r.id);
           const { data: replyData } = await supabase
@@ -132,13 +140,34 @@ export default function CourseDetailPage() {
     fetchData();
   }, [id]);
 
-  async function fetchAiOverview() {
+  async function fetchAiOverview(latestTimestamp?: string, bust = false, gradeDist?: Record<string, number>) {
+    const cacheKey = `ai-summary-${id}-${latestTimestamp ?? "unknown"}`;
+
+    if (!bust && latestTimestamp) {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        try {
+          setAiSummary(JSON.parse(cached));
+          return;
+        } catch {}
+      }
+    }
+
     setAiLoading(true);
+    setAiTooFew(false);
     try {
-      const res = await fetch(`/api/ai-overview?courseId=${id}`);
+      const params = new URLSearchParams({ courseId: String(id) });
+      if (gradeDist) params.set("gradeDistribution", JSON.stringify(gradeDist));
+      const res = await fetch(`/api/ai-overview?${params}`);
       const json = await res.json();
       if (json.error) console.error("AI overview error:", json.error);
-      setAiOverview(json.overview ?? null);
+      if (json.tooFewReviews) {
+        setAiTooFew(true);
+      } else if (json.summary) {
+        json.summary.generated_at = new Date().toISOString();
+        setAiSummary(json.summary);
+        if (latestTimestamp) localStorage.setItem(cacheKey, JSON.stringify(json.summary));
+      }
     } catch (err) {
       console.error("fetchAiOverview failed:", err);
     }
@@ -745,19 +774,106 @@ export default function CourseDetailPage() {
               <span className="text-sm font-semibold text-gray-800">✦ AI Overview</span>
               <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">AI</span>
             </div>
-            {!aiOverview && !aiLoading && (
+            {!aiSummary && !aiLoading && !aiTooFew && (
               <button
-                onClick={fetchAiOverview}
+                onClick={() => fetchAiOverview(reviews[0]?.created_at, false, gradeDistribution)}
                 className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700"
               >
                 Generate
               </button>
             )}
+            {aiSummary && !aiLoading && (
+              <button
+                onClick={() => fetchAiOverview(reviews[0]?.created_at, true, gradeDistribution)}
+                className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1 rounded-lg"
+              >
+                Regenerate
+              </button>
+            )}
           </div>
+
           {aiLoading && <p className="text-sm text-gray-400">Summarizing reviews...</p>}
-          {aiOverview && <p className="text-sm text-gray-700 leading-relaxed">{aiOverview}</p>}
-          {!aiOverview && !aiLoading && (
+
+          {aiTooFew && !aiLoading && (
+            <p className="text-sm text-gray-400">Not enough written reviews to generate a summary yet.</p>
+          )}
+
+          {!aiSummary && !aiLoading && !aiTooFew && (
             <p className="text-sm text-gray-400">Click Generate to get an AI summary of all reviews.</p>
+          )}
+
+          {aiSummary && !aiLoading && (
+            <div className="flex flex-col gap-4">
+              {/* Evidence bar */}
+              <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                <span>Based on {aiSummary.total_reviews} reviews ({aiSummary.with_comments} with comments)</span>
+                <span className={`px-2 py-0.5 rounded-full font-medium ${
+                  aiSummary.confidence === "High" ? "bg-green-100 text-green-700" :
+                  aiSummary.confidence === "Medium" ? "bg-yellow-100 text-yellow-700" :
+                  "bg-red-100 text-red-600"
+                }`}>
+                  {aiSummary.confidence} confidence
+                </span>
+                {aiSummary.generated_at && (
+                  <span className="text-gray-400">
+                    Last updated {new Date(aiSummary.generated_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                  </span>
+                )}
+              </div>
+
+              {/* Overall sentiment */}
+              {aiSummary.overall_sentiment && (
+                <p className="text-sm text-gray-700 leading-relaxed">{aiSummary.overall_sentiment}</p>
+              )}
+
+              {/* Pros / Cons */}
+              <div className="grid grid-cols-2 gap-3">
+                {aiSummary.praises?.length > 0 && (
+                  <div className="bg-green-50 rounded-lg p-3">
+                    <p className="text-xs font-semibold text-green-700 mb-2">What students praise</p>
+                    <ul className="flex flex-col gap-1">
+                      {aiSummary.praises.map((p, i) => (
+                        <li key={i} className="text-xs text-gray-700 flex gap-1.5">
+                          <span className="text-green-500 mt-px">✓</span>{p}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {aiSummary.complaints?.length > 0 && (
+                  <div className="bg-red-50 rounded-lg p-3">
+                    <p className="text-xs font-semibold text-red-700 mb-2">Common complaints</p>
+                    <ul className="flex flex-col gap-1">
+                      {aiSummary.complaints.map((c, i) => (
+                        <li key={i} className="text-xs text-gray-700 flex gap-1.5">
+                          <span className="text-red-400 mt-px">✗</span>{c}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+
+              {/* Workload */}
+              {aiSummary.workload_summary && (
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <p className="text-xs font-semibold text-gray-600 mb-1">Workload snapshot</p>
+                  <p className="text-xs text-gray-700">{aiSummary.workload_summary}</p>
+                </div>
+              )}
+
+              {/* Fit */}
+              {(aiSummary.good_fit || aiSummary.poor_fit) && (
+                <div className="border-t border-gray-100 pt-3 flex flex-col gap-1">
+                  {aiSummary.good_fit && (
+                    <p className="text-xs text-gray-600"><span className="font-semibold text-gray-700">Good fit:</span> {aiSummary.good_fit}</p>
+                  )}
+                  {aiSummary.poor_fit && (
+                    <p className="text-xs text-gray-600"><span className="font-semibold text-gray-700">May struggle:</span> {aiSummary.poor_fit}</p>
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
 
