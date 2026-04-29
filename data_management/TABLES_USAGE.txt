@@ -5,10 +5,11 @@
 
 ## 1. Table Overview
 
-The database consists of six tables:
+The database consists of seven tables:
 
 | Table               | Purpose                                                  |
 |---------------------|----------------------------------------------------------|
+| students            | Registered users (email + hashed password)               |
 | classes             | Course catalog (one row per unique course)                |
 | professor           | Professor identity (one row per unique professor)         |
 | professor_classes   | Which professor taught which course in which semester     |
@@ -22,20 +23,33 @@ There is no metrics table. All analytics are computed dynamically from evaluatio
 
 ## 2. Table Definitions and Column Reference
 
+### students
+
+| Column   | Type    | Constraints        | Notes                                              |
+|----------|---------|--------------------|-----------------------------------------------------|
+| id       | integer | PK, auto-generated | Internal surrogate key                               |
+| email    | varchar | NOT NULL, UNIQUE   | Must be a UMass email address                        |
+| password | varchar | NOT NULL           | bcrypt/argon2 hash only — never store plaintext      |
+
+- If using Supabase Auth, this becomes a profile table linked to auth.users by UUID.
+
 ### classes
 
-| Column        | Type             | Constraints              | Notes                                      |
-|---------------|------------------|--------------------------|---------------------------------------------|
-| id            | integer          | PK, auto-generated       | Internal surrogate key                       |
-| course_number | varchar          | NOT NULL, UNIQUE         | Natural key, e.g. "COMPSCI 320"             |
-| subject       | varchar          | NOT NULL                 | Department prefix, e.g. "COMPSCI"           |
-| name          | varchar          | NOT NULL                 | Course title, e.g. "Software Engineering"   |
-| description   | text             | nullable                 | Catalog description                          |
-| credits       | integer          | nullable                 | Credit hours                                 |
-| classavg      | double precision | nullable                 | Cached average GPA (computed from evals)     |
+| Column        | Type             | Constraints              | Notes                                          |
+|---------------|------------------|--------------------------|------------------------------------------------|
+| id            | integer          | PK, auto-generated       | Internal surrogate key                          |
+| course_number | varchar          | NOT NULL, UNIQUE         | Natural key, e.g. "COMPSCI 320"                |
+| subject       | varchar          | NOT NULL                 | Department prefix, e.g. "COMPSCI"              |
+| name          | varchar          | NOT NULL                 | Course title, e.g. "Software Engineering"      |
+| description   | text             | nullable                 | Catalog description (not scraped yet)           |
+| credits       | integer          | nullable                 | Credit hours (not scraped yet)                  |
+| classavg      | double precision | DEFAULT NULL             | Cached avg GPA; NULL = no ratings yet           |
+| difficulty_avg| double precision | DEFAULT NULL             | Cached avg difficulty; NULL = no ratings yet    |
+| review_count  | integer          | DEFAULT 0                | Number of evaluations; 0 = no reviews yet       |
 
 - Use `course_number` as the conflict target for upserts during scraping.
-- `classavg` is a cached value — recompute it from evaluations when needed.
+- `classavg`, `difficulty_avg`, and `review_count` are cached values — recompute from evaluations when needed.
+- Frontend should branch on `review_count == 0` to show "No reviews yet" rather than a zero rating.
 
 ### professor
 
