@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase/client";
 import CourseSummaryCard, { type CourseListItem } from "@/components/CourseSummaryCard";
@@ -57,13 +58,21 @@ export default function CoursesPage() {
       <main className="mx-auto max-w-4xl px-4 py-8">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
           <h2 className="text-xl font-semibold text-gray-800">Browse Courses</h2>
-          <button
-            type="button"
-            onClick={() => setRequestModalOpen(true)}
-            className="shrink-0 rounded-lg border border-blue-200 bg-white px-4 py-2 text-sm font-medium text-blue-700 shadow-sm hover:bg-blue-50"
-          >
-            Request a class
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href="/courses/compare"
+              className="shrink-0 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-800 shadow-sm hover:bg-gray-50"
+            >
+              Compare courses
+            </Link>
+            <button
+              type="button"
+              onClick={() => setRequestModalOpen(true)}
+              className="shrink-0 rounded-lg border border-blue-200 bg-white px-4 py-2 text-sm font-medium text-blue-700 shadow-sm hover:bg-blue-50"
+            >
+              Request a class
+            </button>
+          </div>
         </div>
 
         <RequestCourseModal open={requestModalOpen} onClose={() => setRequestModalOpen(false)} />
