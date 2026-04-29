@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useState, useEffect, useMemo } from "react";
 import BookmarkButton from "@/components/BookmarkButton";
+import { gpaToLetter } from "@/lib/gpa";
 import { supabase } from "../../../lib/supabase/client";
 import type { Course, Review, Reply } from "../../../types/course";
 
