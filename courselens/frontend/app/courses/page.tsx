@@ -345,15 +345,7 @@ export default function CoursesPage() {
           >
             {sortBy === "code-asc" || sortBy === "code-desc"? buttonText(sortBy): 'Code'}
           </button>
-
-          <div className="">
-          <button className=" flex text-[#2868ce] text-sm ml-1 mt-1 hover:text-[#1a50a7] transition" onClick={() => setVis(!sortVis)}>
-              {sortVis? 'Hide Options': 'More Options'}</button>
-          </div>
-              {sortVis && (
-              <section>
-                <div className="flex gap-2">
-                <button
+          <button
                   onClick={() => {
                     setSortBy(sortBy === "rating-asc" ? "rating-desc" : "rating-asc");
                     lastSort = (sortBy === "rating-asc" ? "rating-desc" : "rating-asc")
@@ -392,10 +384,6 @@ export default function CoursesPage() {
                 >
                   {sortBy === "gpa-asc" || sortBy === "gpa-desc"? buttonText(sortBy): 'Avg Grade'}
                 </button>
-                </div>
-              </section>
-              )}
-            
         </div>
 
         {/* Course Level Filter Section */}
