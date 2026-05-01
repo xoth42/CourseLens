@@ -1,14 +1,9 @@
 "use client";
 
-<<<<<<< HEAD
-import Link from "next/link";
-import { useState, useEffect } from "react";
-import { supabase } from "@/lib/supabase/client";
-=======
->>>>>>> d92c060 (added filtering methods)
 import CourseSummaryCard, { type CourseListItem } from "@/components/CourseSummaryCard";
 import RequestCourseModal from "@/components/RequestCourseModal";
 import { supabase } from "@/lib/supabase/client";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 type Course = CourseListItem & {
@@ -101,6 +96,7 @@ export default function CoursesPage() {
   const [courseLevelsOpen, setCourseLevelsOpen] = useState(false);
   const [sortBy, setSortBy] = useState<"" | "code-asc" | "code-desc" | "a-z" | "z-a" | "rating-asc" | "rating-desc" | "diff-asc" | "diff-desc" | "gpa-asc" | "gpa-desc">(lastSort);
   const [requestModalOpen, setRequestModalOpen] = useState(false);
+  const [sortVis, setVis] = useState(false);
 
 
   useEffect(() => {
@@ -220,7 +216,7 @@ export default function CoursesPage() {
       }
       if (!search.trim()) return 0;
       return scoreMatch(b, searchTerms) - scoreMatch(a, searchTerms);
-    })
+    });
 
   function toggleCourseLevel(level: number) {
     const newLevels = new Set(courseLevels);
@@ -301,7 +297,7 @@ export default function CoursesPage() {
           <select
             value={college}
             onChange={(e) => handleCollegeChange(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none hover:border-gray-400"
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none"
           >
             <option value="">Select College</option>
             {collegeOptions.map((col) => (
@@ -311,7 +307,7 @@ export default function CoursesPage() {
           <select
             value={department}
             onChange={(e) => setDepartment(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none hover:border-gray-400"
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none"
           >
             <option value="">Select Department</option>
             {departmentOptions.map((dept) => (
@@ -349,7 +345,15 @@ export default function CoursesPage() {
           >
             {sortBy === "code-asc" || sortBy === "code-desc"? buttonText(sortBy): 'Code'}
           </button>
-          <button
+
+          <div className="">
+          <button className=" flex text-[#2868ce] text-sm ml-1 mt-1 hover:text-[#1a50a7] transition" onClick={() => setVis(!sortVis)}>
+              {sortVis? 'Hide Options': 'More Options'}</button>
+          </div>
+              {sortVis && (
+              <section>
+                <div className="flex gap-2">
+                <button
                   onClick={() => {
                     setSortBy(sortBy === "rating-asc" ? "rating-desc" : "rating-asc");
                     lastSort = (sortBy === "rating-asc" ? "rating-desc" : "rating-asc")
@@ -388,6 +392,10 @@ export default function CoursesPage() {
                 >
                   {sortBy === "gpa-asc" || sortBy === "gpa-desc"? buttonText(sortBy): 'Avg Grade'}
                 </button>
+                </div>
+              </section>
+              )}
+            
         </div>
 
         {/* Course Level Filter Section */}
