@@ -1,13 +1,12 @@
 "use client";
 
-import { useParams } from "next/navigation";
-import Link from "next/link";
-import { useState, useEffect, useMemo } from "react";
+import { AiSummary } from "@/app/api/ai-overview/route";
 import BookmarkButton from "@/components/BookmarkButton";
-import { gpaToLetter } from "@/lib/gpa";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase/client";
-import type { Course, Review, Reply } from "../../../types/course";
-import type { AiSummary } from "../../api/ai-overview/route";
+import type { Course, Reply, Review } from "../../../types/course";
 
 function gpaToLetter(gpa: number): string {
   if (gpa === 0) return "N/A";
@@ -69,10 +68,14 @@ function gpaTickLabel(gpa: number): string {
   return "0.0 (F)";
 }
 
+let lastSort: "" | "rating-asc" | "rating-desc" | "professor" | "sem-asc" | "sem-desc" = "";
+
 export default function CourseDetailPage() {
   const { id } = useParams();
   const [course, setCourse] = useState<Course | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<"" | "rating-asc" | "rating-desc" | "professor" | "sem-asc" | "sem-desc">(lastSort);
   const [replies, setReplies] = useState<Reply[]>([]);
   const [currentProfileId, setCurrentProfileId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -82,6 +85,7 @@ export default function CourseDetailPage() {
   const [aiSummary, setAiSummary] = useState<AiSummary | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiTooFew, setAiTooFew] = useState(false);
+  const [profs, setProfs] = useState("")
 
   useEffect(() => {
     async function fetchData() {
@@ -94,7 +98,7 @@ export default function CourseDetailPage() {
 
       const { data: reviewData } = await supabase
         .from("course_evaluations")
-        .select("id, student_profile_id, rating, difficulty, grade, semester, professor_name, hours_per_week, comment, created_at")
+        .select("id, course_id, student_profile_id, rating, difficulty, grade, semester, professor_name, hours_per_week, comment, created_at")
         .eq("course_id", Number(id))
         .order("created_at", { ascending: false });
       if (reviewData) {
@@ -289,6 +293,74 @@ export default function CourseDetailPage() {
       value: values.reduce((a, b) => a + b, 0) / values.length,
     }));
   }, [reviews]);
+
+  function semesterToValue(rev: Review): number {
+    switch(rev.semester) {
+      case "Fall 2023": return 1;
+      case "Spring 2024": return 2;
+      case "Fall 2024": return 3;
+      case "Spring 2025": return 4;
+      case "Fall 2025": return 5;
+      case "Spring 2026": return 6;
+      default: return 0;
+    }
+  }
+
+  function hideNoSem(a: Review, b: Review) {
+    if (semesterToValue(a) === 0 && semesterToValue(b) !== 0) return 1
+    if (semesterToValue(b) === 0 && semesterToValue(a) !== 0) return -1
+    if (semesterToValue(a) === 0 && semesterToValue(b) === 0) return 0
+    return -2;
+  }
+
+  const professorOptions = useMemo(() => {
+  return Array.from(
+    new Set(
+      reviews
+        .map(rev => rev.professor_name?.trim())
+        .filter(Boolean)
+    )
+  );
+}, [reviews]);
+
+  const sortedReviews = reviews
+  .filter((rev) => {
+  if (profs) {
+    return rev.professor_name?.trim() === profs;
+  }
+  return true;
+})
+  .sort((a, b) => {
+    const nosem = hideNoSem(a, b);
+    if (sortBy === "rating-asc") return a.rating - b.rating;
+    if (sortBy === "rating-desc") return b.rating - a.rating;
+    if (sortBy === "sem-asc") {
+      return (nosem === -2? semesterToValue(a) - semesterToValue(b): nosem);
+    }
+    if (sortBy === "sem-desc") {
+      return (nosem === -2? semesterToValue(b) - semesterToValue(a): nosem);
+    }
+    if (sortBy === "professor") {
+      const nameA = a.professor_name || "";
+      const nameB = b.professor_name || "";
+      return nameA.localeCompare(nameB);
+    }
+    return 0;
+  });
+
+  function buttonText(sort) {
+    let ratingButton;
+    let semButton;
+    if (sort === 'rating-asc' || sort === 'rating-desc'){
+      sort === 'rating-asc' ? ratingButton = 'Rating ↑' : ratingButton = 'Rating ↓'
+      return ratingButton;
+    }
+    if (sort === 'sem-asc' || sort === 'sem-desc'){
+      sort === 'sem-asc' ? semButton = 'Semester ↑' : semButton = 'Semester ↓'
+      return semButton;
+    }
+    return 
+  }
 
   if (loading) {
     return (
@@ -883,11 +955,51 @@ export default function CourseDetailPage() {
           <h3 className="text-lg font-semibold text-gray-800 mb-4">
             {reviews.length} Review{reviews.length !== 1 ? "s" : ""}
           </h3>
+
+          {/*Sorting*/}
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-sm text-gray-500 font-medium">Sort:</span>
+            <button
+              onClick={() => {
+                setSortBy(sortBy === "rating-asc" ? "rating-desc" : "rating-asc");
+                lastSort = (sortBy === "rating-asc" ? "rating-desc" : "rating-asc");
+              }}
+              className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
+                (sortBy === "rating-asc" || sortBy === "rating-desc")
+                  ? "bg-blue-600 text-white border-blue-600 hover:border-blue-400"
+                  : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+              }`}
+            >
+              {sortBy === "rating-asc" || sortBy === "rating-desc"? buttonText(sortBy): 'Rating'}
+            </button>
+            <button
+              onClick={() => {
+                setSortBy(sortBy === "sem-asc" ? "sem-desc" : "sem-asc");
+                lastSort = (sortBy === "sem-asc" ? "sem-desc" : "sem-asc");
+              }}
+              className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
+                (sortBy === "sem-asc" || sortBy === "sem-desc")
+                  ? "bg-blue-600 text-white border-blue-600 hover:border-blue-400"
+                  : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+              }`}
+            >
+              {sortBy === "sem-asc" || sortBy === "sem-desc"? buttonText(sortBy): 'Semester'}
+            </button>
+            <div className="px-3 py-1.5 text-sm font-medium border rounded bg-white text-gray-700 border-gray-300 hover:border-gray-400">
+              <select onChange={(e) => setProfs(e.target.value)}>
+                <option value="">All Professors</option>
+                {professorOptions.map((prof) => (
+                  <option key={prof} value={prof}>{prof}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           {reviews.length === 0 ? (
             <p className="text-gray-400 text-sm">No reviews yet. Be the first!</p>
           ) : (
             <div className="flex flex-col gap-4">
-              {reviews.map((r) => (
+              {sortedReviews.map((r) => (
                 <ReviewCard
                   key={r.id}
                   review={r}
