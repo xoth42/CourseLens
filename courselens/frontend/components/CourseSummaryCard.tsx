@@ -33,10 +33,13 @@ export default function CourseSummaryCard({
         <label
           className="absolute left-3 top-3 z-10 inline-flex cursor-pointer items-center"
           aria-label={`Select ${course.code} for comparison`}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
         >
           <input
             type="checkbox"
             checked={selected}
+            onClick={(e) => e.stopPropagation()}
             onChange={() => onToggleSelect?.(course.id)}
             className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
           />

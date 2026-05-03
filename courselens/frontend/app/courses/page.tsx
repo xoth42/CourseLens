@@ -1,12 +1,25 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import CourseSummaryCard, { type CourseListItem } from "@/components/CourseSummaryCard";
 import RequestCourseModal from "@/components/RequestCourseModal";
 
 const MAX_COMPARE = 4;
+
+type SortKey =
+  | ""
+  | "code-asc"
+  | "code-desc"
+  | "a-z"
+  | "z-a"
+  | "rating-asc"
+  | "rating-desc"
+  | "diff-asc"
+  | "diff-desc"
+  | "gpa-asc"
+  | "gpa-desc";
 
 type Course = CourseListItem & {
   id: number;
@@ -15,6 +28,7 @@ type Course = CourseListItem & {
   professor: string;
   rating: number;
   difficulty: number;
+  avg_gpa: number;
   reviews: number;
   department: string;
   college: string | null;
@@ -23,18 +37,18 @@ type Course = CourseListItem & {
 // Maps raw SPIRE college names to short user-facing labels for the dropdown.
 // Strip "College of" / "School of" prefixes and named honorifics (Manning, Isenberg).
 const COLLEGE_DISPLAY: Record<string, string> = {
-  "College of Education":                              "Education",
-  "College of Engineering":                            "Engineering",
-  "College of Humanities & Fine Arts":                 "Humanities & Fine Arts",
-  "College of Natural Sciences":                       "Natural Sciences",
-  "College of Social & Behavioral Sciences":           "Social & Behavioral Sciences",
-  "Isenberg School of Management":                     "Management",
+  "College of Education": "Education",
+  "College of Engineering": "Engineering",
+  "College of Humanities & Fine Arts": "Humanities & Fine Arts",
+  "College of Natural Sciences": "Natural Sciences",
+  "College of Social & Behavioral Sciences": "Social & Behavioral Sciences",
+  "Isenberg School of Management": "Management",
   "Manning College of Information & Computer Sciences": "Information & Computer Sciences",
-  "School of Nursing":                                 "Nursing",
-  "School of Public Health & Health Sciences":         "Public Health & Health Sciences",
-  "Other Credit Offerings":                            "Other",
-  "Non-Credit Offerings (thru CE)":                    "Other",
-  "Equivalency (Pseudo) Courses":                      "Other",
+  "School of Nursing": "Nursing",
+  "School of Public Health & Health Sciences": "Public Health & Health Sciences",
+  "Other Credit Offerings": "Other",
+  "Non-Credit Offerings (thru CE)": "Other",
+  "Equivalency (Pseudo) Courses": "Other",
 };
 
 function collegeLabel(raw: string): string {
@@ -44,12 +58,12 @@ function collegeLabel(raw: string): string {
 // Common abbreviations students use that differ significantly from SPIRE subject codes.
 // Order matters: longer abbreviations must come before shorter prefixes (e.g. "stats" before "stat").
 const SUBJECT_SHORTHANDS: [abbr: string, full: string][] = [
-  ["cs",    "compsci"],   // CS → COMPSCI
-  ["ece",   "e&c-eng"],   // ECE → Electrical & Computer Engineering
-  ["bme",   "bmed-eng"],  // BME → Biomedical Engineering
-  ["stats", "statistc"],  // stats → STATISTC (odd SPIRE code)
-  ["stat",  "statistc"],  // stat  → STATISTC
-  ["mie",   "m&i-eng"],   // MIE  → Mechanical & Industrial Engineering
+  ["cs", "compsci"], // CS → COMPSCI
+  ["ece", "e&c-eng"], // ECE → Electrical & Computer Engineering
+  ["bme", "bmed-eng"], // BME → Biomedical Engineering
+  ["stats", "statistc"], // stats → STATISTC (odd SPIRE code)
+  ["stat", "statistc"], // stat  → STATISTC
+  ["mie", "m&i-eng"], // MIE  → Mechanical & Industrial Engineering
 ];
 
 // Returns [original, expanded?].
@@ -85,6 +99,29 @@ function scoreMatch(course: Course, terms: string[]): number {
   return 0;
 }
 
+function buttonText(sort: SortKey): string {
+  if (sort === "a-z") return "A-Z ↑";
+  if (sort === "z-a") return "A-Z ↓";
+  if (sort === "code-asc") return "Code ↑";
+  if (sort === "code-desc") return "Code ↓";
+  if (sort === "rating-asc") return "Rating ↑";
+  if (sort === "rating-desc") return "Rating ↓";
+  if (sort === "diff-asc") return "Difficulty ↑";
+  if (sort === "diff-desc") return "Difficulty ↓";
+  if (sort === "gpa-asc") return "Avg Grade ↑";
+  if (sort === "gpa-desc") return "Avg Grade ↓";
+  return "";
+}
+
+function hideUnrated(a: Course, b: Course, prop: "rating" | "difficulty" | "avg_gpa"): number {
+  const av = a[prop];
+  const bv = b[prop];
+  if (av === 0 && bv !== 0) return 1;
+  if (bv === 0 && av !== 0) return -1;
+  if (av === 0 && bv === 0) return 0;
+  return -2;
+}
+
 export default function CoursesPage() {
   const router = useRouter();
   const [courses, setCourses] = useState<Course[]>([]);
@@ -94,15 +131,14 @@ export default function CoursesPage() {
   const [department, setDepartment] = useState("");
   const [courseLevels, setCourseLevels] = useState<Set<number>>(new Set());
   const [courseLevelsOpen, setCourseLevelsOpen] = useState(false);
-  const [sortBy, setSortBy] = useState<"" | "code-asc" | "code-desc">("");
+  const [sortBy, setSortBy] = useState<SortKey>("a-z");
   const [requestModalOpen, setRequestModalOpen] = useState(false);
   const [selectedForCompare, setSelectedForCompare] = useState<Set<number>>(new Set());
-
 
   useEffect(() => {
     async function fetchCourses() {
       const { data, error } = await supabase.from("course_metrics").select("*");
-      if (!error && data) setCourses(data);
+      if (!error && data) setCourses(data as Course[]);
       setLoading(false);
     }
     fetchCourses();
@@ -110,14 +146,14 @@ export default function CoursesPage() {
 
   function getCourseNumber(code: string): number {
     const match = code.match(/\d+/);
-    return match ? parseInt(match[0]) : 0;
+    return match ? parseInt(match[0], 10) : 0;
   }
 
   // Extract course level from course code (e.g., "CS230" → 200)
   function getCourseLevel(code: string): number | null {
     const match = code.match(/\d+/);
     if (!match) return null;
-    const num = parseInt(match[0]);
+    const num = parseInt(match[0], 10);
     if (num < 100) return null;
     if (num < 200) return 100;
     if (num < 300) return 200;
@@ -165,15 +201,12 @@ export default function CoursesPage() {
       const lProf = course.professor.toLowerCase();
       const matchesSearch =
         !search.trim() ||
-        searchTerms.some((term) =>
-          lName.includes(term) || lCode.includes(term) || lProf.includes(term)
-        );
+        searchTerms.some((term) => lName.includes(term) || lCode.includes(term) || lProf.includes(term));
 
       const matchesCollege =
         college === "" || (course.college !== null && collegeLabel(course.college) === college);
 
-      const matchesDepartment =
-        department === "" || course.department === department;
+      const matchesDepartment = department === "" || course.department === department;
 
       const courseLevel = getCourseLevel(course.code);
       const matchesLevel =
@@ -184,6 +217,29 @@ export default function CoursesPage() {
     .sort((a, b) => {
       if (sortBy === "code-asc") return getCourseNumber(a.code) - getCourseNumber(b.code);
       if (sortBy === "code-desc") return getCourseNumber(b.code) - getCourseNumber(a.code);
+      if (sortBy === "a-z") return a.code.localeCompare(b.code);
+      if (sortBy === "z-a") return b.code.localeCompare(a.code);
+      const noratings = hideUnrated(a, b, "rating");
+      const nodiff = hideUnrated(a, b, "difficulty");
+      const nogpa = hideUnrated(a, b, "avg_gpa");
+      if (sortBy === "rating-asc") {
+        return noratings === -2 ? a.rating - b.rating : noratings;
+      }
+      if (sortBy === "rating-desc") {
+        return noratings === -2 ? b.rating - a.rating : noratings;
+      }
+      if (sortBy === "diff-asc") {
+        return nodiff === -2 ? a.difficulty - b.difficulty : nodiff;
+      }
+      if (sortBy === "diff-desc") {
+        return nodiff === -2 ? b.difficulty - a.difficulty : nodiff;
+      }
+      if (sortBy === "gpa-asc") {
+        return nogpa === -2 ? a.avg_gpa - b.avg_gpa : nogpa;
+      }
+      if (sortBy === "gpa-desc") {
+        return nogpa === -2 ? b.avg_gpa - a.avg_gpa : nogpa;
+      }
       if (!search.trim()) return 0;
       return scoreMatch(b, searchTerms) - scoreMatch(a, searchTerms);
     });
@@ -223,10 +279,14 @@ export default function CoursesPage() {
     setSelectedForCompare(new Set());
   }
 
+  const selectedCoursesOrdered = Array.from(selectedForCompare)
+    .map((id) => courses.find((c) => c.id === id))
+    .filter((c): c is Course => c != null);
+
   return (
-    <div className="min-h-full flex-1 bg-gray-50">
+    <div className="min-h-full flex-1 bg-gray-50 pb-32">
       <main className="mx-auto max-w-4xl px-4 py-8">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
+        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-xl font-semibold text-gray-800">Browse Courses</h2>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -241,111 +301,121 @@ export default function CoursesPage() {
 
         <RequestCourseModal open={requestModalOpen} onClose={() => setRequestModalOpen(false)} />
 
-        <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-sm font-medium text-blue-900">
-              Compare selector: choose up to {MAX_COMPARE} courses directly from this page.
-            </p>
-            <div className="flex items-center gap-2">
-              <span className="rounded-md bg-white px-2.5 py-1 text-xs font-semibold text-blue-800">
-                {selectedForCompare.size} / {MAX_COMPARE} selected
-              </span>
-              <button
-                type="button"
-                onClick={() =>
-                  router.push(`/courses/compare?ids=${Array.from(selectedForCompare).join(",")}`)
-                }
-                disabled={selectedForCompare.size < 2}
-                className="rounded-md bg-blue-600 px-3 py-1 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Compare selected
-              </button>
-              <button
-                type="button"
-                onClick={clearComparison}
-                disabled={selectedForCompare.size === 0}
-                className="rounded-md border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex flex-col sm:flex-row gap-3 mb-4 flex-wrap">
+        <div className="mb-4 flex flex-col flex-wrap gap-3 sm:flex-row">
           <input
             type="text"
             placeholder="Search by name, code, or professor..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="flex-1 min-w-48 border border-gray-300 rounded-lg px-4 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="min-w-48 flex-1 rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <select
             value={college}
             onChange={(e) => handleCollegeChange(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none"
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none"
           >
             <option value="">Select College</option>
             {collegeOptions.map((col) => (
-              <option key={col} value={col}>{col}</option>
+              <option key={col} value={col}>
+                {col}
+              </option>
             ))}
           </select>
           <select
             value={department}
             onChange={(e) => setDepartment(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none"
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none"
           >
             <option value="">Select Department</option>
             {departmentOptions.map((dept) => (
-              <option key={dept} value={dept}>{dept}</option>
+              <option key={dept} value={dept}>
+                {dept}
+              </option>
             ))}
           </select>
         </div>
 
         {/* Sort Controls */}
-        <div className="flex items-center gap-2 mb-4">
-          <span className="text-sm text-gray-500 font-medium">Sort:</span>
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-gray-500">Sort:</span>
           <button
-            onClick={() => setSortBy(sortBy === "code-asc" ? "" : "code-asc")}
-            className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
-              sortBy === "code-asc"
-                ? "bg-blue-600 text-white border-blue-600"
-                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+            type="button"
+            onClick={() => setSortBy(sortBy === "a-z" ? "z-a" : "a-z")}
+            className={`rounded border px-3 py-1.5 text-sm font-medium transition-colors ${
+              sortBy === "a-z" || sortBy === "z-a"
+                ? "border-blue-600 bg-blue-600 text-white hover:border-blue-400"
+                : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
             }`}
           >
-            Code ↑
+            {sortBy === "a-z" || sortBy === "z-a" ? buttonText(sortBy) : "A-Z"}
           </button>
           <button
-            onClick={() => setSortBy(sortBy === "code-desc" ? "" : "code-desc")}
-            className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
-              sortBy === "code-desc"
-                ? "bg-blue-600 text-white border-blue-600"
-                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+            type="button"
+            onClick={() => setSortBy(sortBy === "code-asc" ? "code-desc" : "code-asc")}
+            className={`rounded border px-3 py-1.5 text-sm font-medium transition-colors ${
+              sortBy === "code-asc" || sortBy === "code-desc"
+                ? "border-blue-600 bg-blue-600 text-white hover:border-blue-400"
+                : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
             }`}
           >
-            Code ↓
+            {sortBy === "code-asc" || sortBy === "code-desc" ? buttonText(sortBy) : "Code"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setSortBy(sortBy === "rating-asc" ? "rating-desc" : "rating-asc")}
+            className={`rounded border px-3 py-1.5 text-sm font-medium transition-colors ${
+              sortBy === "rating-asc" || sortBy === "rating-desc"
+                ? "border-blue-600 bg-blue-600 text-white hover:border-blue-400"
+                : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
+            }`}
+          >
+            {sortBy === "rating-asc" || sortBy === "rating-desc" ? buttonText(sortBy) : "Rating"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setSortBy(sortBy === "diff-asc" ? "diff-desc" : "diff-asc")}
+            className={`rounded border px-3 py-1.5 text-sm font-medium transition-colors ${
+              sortBy === "diff-asc" || sortBy === "diff-desc"
+                ? "border-blue-600 bg-blue-600 text-white hover:border-blue-400"
+                : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
+            }`}
+          >
+            {sortBy === "diff-asc" || sortBy === "diff-desc" ? buttonText(sortBy) : "Difficulty"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setSortBy(sortBy === "gpa-asc" ? "gpa-desc" : "gpa-asc")}
+            className={`rounded border px-3 py-1.5 text-sm font-medium transition-colors ${
+              sortBy === "gpa-asc" || sortBy === "gpa-desc"
+                ? "border-blue-600 bg-blue-600 text-white hover:border-blue-400"
+                : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
+            }`}
+          >
+            {sortBy === "gpa-asc" || sortBy === "gpa-desc" ? buttonText(sortBy) : "Avg Grade"}
           </button>
         </div>
 
         {/* Course Level Filter Section */}
-        <div className="border-b border-gray-200 mb-4">
+        <div className="mb-4 border-b border-gray-200">
           <button
+            type="button"
             onClick={() => setCourseLevelsOpen(!courseLevelsOpen)}
-            className="w-full flex justify-between items-center py-3 px-0 text-left font-semibold text-gray-800 hover:text-gray-600 transition-colors"
+            className="flex w-full justify-between px-0 py-3 text-left font-semibold text-gray-800 transition-colors hover:text-gray-600"
           >
             <span>Course Level</span>
             <span className="text-xl">{courseLevelsOpen ? "−" : "+"}</span>
           </button>
           {courseLevelsOpen && (
-            <div className="pb-3 flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 pb-3">
               {availableCourseLevels.map((level) => (
                 <button
                   key={level}
+                  type="button"
                   onClick={() => toggleCourseLevel(level)}
-                  className={`px-3 py-2 text-sm font-medium border rounded transition-colors ${
+                  className={`rounded border px-3 py-2 text-sm font-medium transition-colors ${
                     courseLevels.has(level)
-                      ? "bg-blue-600 text-white border-blue-600"
-                      : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+                      ? "border-blue-600 bg-blue-600 text-white"
+                      : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
                   }`}
                 >
                   {getLevelLabel(level)}
@@ -354,15 +424,15 @@ export default function CoursesPage() {
             </div>
           )}
         </div>
-        <p className="text-sm text-gray-400 mb-4">
+        <p className="mb-4 text-sm text-gray-400">
           {loading ? "Loading..." : `${filteredCourses.length} course${filteredCourses.length !== 1 ? "s" : ""} found`}
         </p>
 
         <div className="flex flex-col gap-4">
           {loading ? (
-            <p className="text-center text-gray-400 py-16">Loading courses...</p>
+            <p className="py-16 text-center text-gray-400">Loading courses...</p>
           ) : filteredCourses.length === 0 ? (
-            <p className="text-center text-gray-400 py-16">No courses match your search.</p>
+            <p className="py-16 text-center text-gray-400">No courses match your search.</p>
           ) : (
             filteredCourses.map((course) => (
               <CourseSummaryCard
@@ -375,8 +445,61 @@ export default function CoursesPage() {
             ))
           )}
         </div>
-
       </main>
+
+      <aside
+        className={`fixed bottom-5 left-1/2 z-20 flex w-[min(930px,calc(100%-26px))] -translate-x-1/2 items-center justify-between gap-3 rounded-3xl border border-gray-200 bg-white/95 px-3 py-3 shadow-lg backdrop-blur-sm transition-all duration-300 sm:px-4 ${
+          selectedForCompare.size > 0
+            ? "translate-y-0 opacity-100"
+            : "pointer-events-none translate-y-[130%] opacity-0"
+        }`}
+        aria-live="polite"
+        aria-label="Course comparison selection"
+      >
+        <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="shrink-0 text-sm font-extrabold text-emerald-950">
+            {selectedForCompare.size} of {MAX_COMPARE} selected
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {selectedCoursesOrdered.map((c) => (
+              <span
+                key={c.id}
+                className="inline-flex items-center gap-1.5 rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-bold text-blue-900"
+              >
+                {c.code}
+                <button
+                  type="button"
+                  onClick={() => toggleCompare(c.id)}
+                  className="font-black leading-none text-blue-900 hover:text-blue-700"
+                  aria-label={`Remove ${c.code} from comparison`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={clearComparison}
+            className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
+          >
+            Clear
+          </button>
+          <button
+            type="button"
+            disabled={selectedForCompare.size < 2}
+            onClick={() => {
+              if (selectedForCompare.size < 2) return;
+              router.push(`/courses/compare?ids=${Array.from(selectedForCompare).join(",")}`);
+            }}
+            className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Compare selected
+          </button>
+        </div>
+      </aside>
     </div>
   );
 }
