@@ -1,10 +1,12 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase/client";
 import CourseSummaryCard, { type CourseListItem } from "@/components/CourseSummaryCard";
 import RequestCourseModal from "@/components/RequestCourseModal";
+
+const MAX_COMPARE = 4;
 
 type Course = CourseListItem & {
   id: number;
@@ -84,6 +86,7 @@ function scoreMatch(course: Course, terms: string[]): number {
 }
 
 export default function CoursesPage() {
+  const router = useRouter();
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -93,6 +96,7 @@ export default function CoursesPage() {
   const [courseLevelsOpen, setCourseLevelsOpen] = useState(false);
   const [sortBy, setSortBy] = useState<"" | "code-asc" | "code-desc">("");
   const [requestModalOpen, setRequestModalOpen] = useState(false);
+  const [selectedForCompare, setSelectedForCompare] = useState<Set<number>>(new Set());
 
 
   useEffect(() => {
@@ -198,18 +202,33 @@ export default function CoursesPage() {
     if (level === 600) return "600+";
     return `${level}`;
   }
+
+  function toggleCompare(courseId: number) {
+    setSelectedForCompare((prev) => {
+      const next = new Set(prev);
+      if (next.has(courseId)) {
+        next.delete(courseId);
+        return next;
+      }
+      if (next.size >= MAX_COMPARE) {
+        const oldest = next.values().next().value as number | undefined;
+        if (oldest !== undefined) next.delete(oldest);
+      }
+      next.add(courseId);
+      return next;
+    });
+  }
+
+  function clearComparison() {
+    setSelectedForCompare(new Set());
+  }
+
   return (
     <div className="min-h-full flex-1 bg-gray-50">
       <main className="mx-auto max-w-4xl px-4 py-8">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
           <h2 className="text-xl font-semibold text-gray-800">Browse Courses</h2>
           <div className="flex flex-wrap items-center gap-2">
-            <Link
-              href="/courses/compare"
-              className="shrink-0 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-800 shadow-sm hover:bg-gray-50"
-            >
-              Compare courses
-            </Link>
             <button
               type="button"
               onClick={() => setRequestModalOpen(true)}
@@ -221,6 +240,37 @@ export default function CoursesPage() {
         </div>
 
         <RequestCourseModal open={requestModalOpen} onClose={() => setRequestModalOpen(false)} />
+
+        <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-medium text-blue-900">
+              Compare selector: choose up to {MAX_COMPARE} courses directly from this page.
+            </p>
+            <div className="flex items-center gap-2">
+              <span className="rounded-md bg-white px-2.5 py-1 text-xs font-semibold text-blue-800">
+                {selectedForCompare.size} / {MAX_COMPARE} selected
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  router.push(`/courses/compare?ids=${Array.from(selectedForCompare).join(",")}`)
+                }
+                disabled={selectedForCompare.size < 2}
+                className="rounded-md bg-blue-600 px-3 py-1 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Compare selected
+              </button>
+              <button
+                type="button"
+                onClick={clearComparison}
+                disabled={selectedForCompare.size === 0}
+                className="rounded-md border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        </div>
 
         <div className="flex flex-col sm:flex-row gap-3 mb-4 flex-wrap">
           <input
@@ -315,10 +365,17 @@ export default function CoursesPage() {
             <p className="text-center text-gray-400 py-16">No courses match your search.</p>
           ) : (
             filteredCourses.map((course) => (
-              <CourseSummaryCard key={course.id} course={course} />
+              <CourseSummaryCard
+                key={course.id}
+                course={course}
+                selectable
+                selected={selectedForCompare.has(course.id)}
+                onToggleSelect={toggleCompare}
+              />
             ))
           )}
         </div>
+
       </main>
     </div>
   );

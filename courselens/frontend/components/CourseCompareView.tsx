@@ -5,10 +5,6 @@ import type { Key, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { gpaToLetter } from "@/lib/gpa";
-import {
-  GRADE_DISTRIBUTION_LABELS,
-  illustrativeSharesFromAvgGpa,
-} from "@/lib/illustrative-grade-distribution";
 import type { Course } from "@/types/course";
 
 const MAX_COMPARE = 4;
@@ -22,12 +18,45 @@ function bestIndices(values: number[], mode: "max" | "min"): number[] {
     .map((item) => item.i);
 }
 
-type CompareCourse = Course & { distribution: number[] };
+const GRADE_DISTRIBUTION_LABELS = ["A", "A-", "B+", "B", "B-", "C+", "C", "D/F"] as const;
 
-function enrichCourse(c: Course): CompareCourse {
+type CompareCourse = Course & {
+  distribution: number[];
+  gradeSampleSize: number;
+};
+
+function normalizeGrade(grade: string | null): string | null {
+  if (!grade) return null;
+  const cleaned = grade.trim().toUpperCase();
+  const allowed = ["A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "F"];
+  return allowed.includes(cleaned) ? cleaned : null;
+}
+
+function gradeBucketIndex(grade: string): number {
+  if (grade === "A") return 0;
+  if (grade === "A-") return 1;
+  if (grade === "B+") return 2;
+  if (grade === "B") return 3;
+  if (grade === "B-") return 4;
+  if (grade === "C+") return 5;
+  if (grade === "C" || grade === "C-") return 6;
+  return 7;
+}
+
+function buildDistribution(grades: (string | null)[]): { distribution: number[]; sampleSize: number } {
+  const counts = new Array(GRADE_DISTRIBUTION_LABELS.length).fill(0);
+  for (const rawGrade of grades) {
+    const grade = normalizeGrade(rawGrade);
+    if (!grade) continue;
+    counts[gradeBucketIndex(grade)] += 1;
+  }
+  const sampleSize = counts.reduce((sum, count) => sum + count, 0);
+  if (sampleSize === 0) {
+    return { distribution: new Array(GRADE_DISTRIBUTION_LABELS.length).fill(0), sampleSize: 0 };
+  }
   return {
-    ...c,
-    distribution: illustrativeSharesFromAvgGpa(c.avg_gpa),
+    distribution: counts.map((count) => (count / sampleSize) * 100),
+    sampleSize,
   };
 }
 
@@ -74,19 +103,43 @@ function MiniBarsChart({ values, onClick }: { values: number[]; onClick?: () => 
   return inner;
 }
 
-export default function CourseCompareView() {
+type CourseCompareViewProps = {
+  initialSelectedIds?: number[];
+};
+
+export default function CourseCompareView({ initialSelectedIds = [] }: CourseCompareViewProps) {
+  const initialSelection = initialSelectedIds
+    .filter((id) => Number.isFinite(id))
+    .slice(0, MAX_COMPARE);
+
   const [courses, setCourses] = useState<CompareCourse[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [view, setView] = useState<"list" | "compare">("list");
+  const [selected, setSelected] = useState<Set<number>>(new Set(initialSelection));
+  const [view, setView] = useState<"list" | "compare">(initialSelection.length > 0 ? "compare" : "list");
   const [modalCourse, setModalCourse] = useState<CompareCourse | null>(null);
 
   useEffect(() => {
     async function load() {
-      const { data, error } = await supabase.from("course_metrics").select("*");
-      if (!error && data) {
-        setCourses((data as Course[]).map(enrichCourse));
+      const [{ data: metricsData, error: metricsError }, { data: evalData, error: evalError }] =
+        await Promise.all([
+          supabase.from("course_metrics").select("*"),
+          supabase.from("course_evaluations").select("course_id, grade"),
+        ]);
+
+      if (!metricsError && !evalError && metricsData) {
+        const gradesByCourseId = new Map<number, (string | null)[]>();
+        for (const row of (evalData ?? []) as { course_id: number; grade: string | null }[]) {
+          const list = gradesByCourseId.get(row.course_id) ?? [];
+          list.push(row.grade);
+          gradesByCourseId.set(row.course_id, list);
+        }
+
+        const enriched = (metricsData as Course[]).map((course) => {
+          const { distribution, sampleSize } = buildDistribution(gradesByCourseId.get(course.id) ?? []);
+          return { ...course, distribution, gradeSampleSize: sampleSize };
+        });
+        setCourses(enriched);
       }
       setLoading(false);
     }
@@ -217,7 +270,7 @@ export default function CourseCompareView() {
             </tr>
             <tr>
               <td className="sticky left-0 z-[1] border-b border-emerald-100/80 bg-slate-50/95 px-3.5 py-3 text-sm font-bold text-emerald-900">
-                Illustrative grade mix
+                Grade distribution
               </td>
               {compared.map((c) => (
                 <td
@@ -258,8 +311,7 @@ export default function CourseCompareView() {
           </tbody>
         </table>
         <p className="border-t border-gray-100 px-4 py-2 text-xs text-slate-500">
-          Illustrative grade bars are inferred from mean GPA for layout only, not official
-          registrar data.
+          Grade bars use real submitted course evaluations, bucketed by letter grade.
         </p>
       </div>
     );
@@ -361,9 +413,12 @@ export default function CourseCompareView() {
                       </div>
                       <div>
                         <div className="text-[0.74rem] font-bold uppercase tracking-wide text-slate-500">
-                          Illustrative mix
+                          Grade distribution
                         </div>
                         <Sparkline values={course.distribution} />
+                        <div className="mt-1 text-[0.72rem] text-slate-500">
+                          n={course.gradeSampleSize}
+                        </div>
                       </div>
                     </article>
                   );
@@ -447,7 +502,7 @@ export default function CourseCompareView() {
           className="fixed inset-0 z-30 flex items-center justify-center bg-black/55 p-5"
           role="dialog"
           aria-modal="true"
-          aria-label="Illustrative grade distribution"
+          aria-label="Grade distribution"
           onClick={(e) => {
             if (e.target === e.currentTarget) setModalCourse(null);
           }}
@@ -456,7 +511,7 @@ export default function CourseCompareView() {
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-lg font-bold text-gray-900">
-                  {modalCourse.code} — illustrative mix
+                  {modalCourse.code} — grade distribution
                 </h3>
                 <p className="text-sm text-gray-500">
                   {modalCourse.name} · {modalCourse.professor}
@@ -493,8 +548,8 @@ export default function CourseCompareView() {
                 })}
               </div>
               <p className="mt-3 text-sm text-slate-600">
-                Shares sum to 100% (illustrative). Not official grade counts. Based on course
-                average GPA ({modalCourse.avg_gpa > 0 ? modalCourse.avg_gpa.toFixed(2) : "N/A"}).
+                Shares sum to 100% based on submitted course evaluations. Sample size:{" "}
+                {modalCourse.gradeSampleSize}.
               </p>
             </div>
           </div>
