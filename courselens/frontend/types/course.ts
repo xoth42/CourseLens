@@ -13,6 +13,7 @@ export type Course = {
   
 export type Review = {
   id: number;
+  course_id: number;
   student_profile_id: number;
   rating: number;
   difficulty: number;

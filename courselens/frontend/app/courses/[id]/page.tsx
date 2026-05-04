@@ -1,12 +1,12 @@
 "use client";
 
-import { useParams } from "next/navigation";
-import Link from "next/link";
-import { useState, useEffect, useMemo } from "react";
+import { AiSummary } from "@/app/api/ai-overview/route";
 import BookmarkButton from "@/components/BookmarkButton";
-import { gpaToLetter } from "@/lib/gpa";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase/client";
-import type { Course, Review, Reply } from "../../../types/course";
+import type { Course, Reply, Review } from "../../../types/course";
 
 function normalizeGrade(grade: string | null): string | null {
   if (!grade) return null;
@@ -54,18 +54,24 @@ function gpaTickLabel(gpa: number): string {
   return "0.0 (F)";
 }
 
+let lastSort: "" | "rating-asc" | "rating-desc" | "professor" | "sem-asc" | "sem-desc" = "";
+
 export default function CourseDetailPage() {
   const { id } = useParams();
   const [course, setCourse] = useState<Course | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<"" | "rating-asc" | "rating-desc" | "professor" | "sem-asc" | "sem-desc">(lastSort);
   const [replies, setReplies] = useState<Reply[]>([]);
   const [currentProfileId, setCurrentProfileId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [alreadyReviewed, setAlreadyReviewed] = useState(false);
   const [showPopup, setShowPopup] = useState(false);
   const [selectedGraph, setSelectedGraph] = useState("distribution");
-  const [aiOverview, setAiOverview] = useState<string | null>(null);
+  const [aiSummary, setAiSummary] = useState<AiSummary | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiTooFew, setAiTooFew] = useState(false);
+  const [profs, setProfs] = useState("")
 
   useEffect(() => {
     async function fetchData() {
@@ -78,11 +84,17 @@ export default function CourseDetailPage() {
 
       const { data: reviewData } = await supabase
         .from("course_evaluations")
-        .select("id, student_profile_id, rating, difficulty, grade, semester, professor_name, hours_per_week, comment, created_at")
+        .select("id, course_id, student_profile_id, rating, difficulty, grade, semester, professor_name, hours_per_week, comment, created_at")
         .eq("course_id", Number(id))
         .order("created_at", { ascending: false });
       if (reviewData) {
         setReviews(reviewData);
+        const commentCount = reviewData.filter((r: Review) => r.comment).length;
+        if (commentCount >= 5) {
+          const buckets: Record<string, number> = { A: 0, "A-": 0, "B+": 0, B: 0, "B-": 0, "C+": 0, C: 0, "C-": 0, "D+": 0, D: 0, F: 0 };
+          reviewData.forEach((r: Review) => { const g = r.grade?.toUpperCase(); if (g && buckets[g] !== undefined) buckets[g]++; });
+          fetchAiOverview(reviewData[0]?.created_at, false, buckets);
+        }
         if (reviewData.length > 0) {
           const reviewIds = reviewData.map((r: Review) => r.id);
           const { data: replyData } = await supabase
@@ -119,13 +131,34 @@ export default function CourseDetailPage() {
     fetchData();
   }, [id]);
 
-  async function fetchAiOverview() {
+  async function fetchAiOverview(latestTimestamp?: string, bust = false, gradeDist?: Record<string, number>) {
+    const cacheKey = `ai-summary-${id}-${latestTimestamp ?? "unknown"}`;
+
+    if (!bust && latestTimestamp) {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        try {
+          setAiSummary(JSON.parse(cached));
+          return;
+        } catch {}
+      }
+    }
+
     setAiLoading(true);
+    setAiTooFew(false);
     try {
-      const res = await fetch(`/api/ai-overview?courseId=${id}`);
+      const params = new URLSearchParams({ courseId: String(id) });
+      if (gradeDist) params.set("gradeDistribution", JSON.stringify(gradeDist));
+      const res = await fetch(`/api/ai-overview?${params}`);
       const json = await res.json();
       if (json.error) console.error("AI overview error:", json.error);
-      setAiOverview(json.overview ?? null);
+      if (json.tooFewReviews) {
+        setAiTooFew(true);
+      } else if (json.summary) {
+        json.summary.generated_at = new Date().toISOString();
+        setAiSummary(json.summary);
+        if (latestTimestamp) localStorage.setItem(cacheKey, JSON.stringify(json.summary));
+      }
     } catch (err) {
       console.error("fetchAiOverview failed:", err);
     }
@@ -246,6 +279,74 @@ export default function CourseDetailPage() {
       value: values.reduce((a, b) => a + b, 0) / values.length,
     }));
   }, [reviews]);
+
+  function semesterToValue(rev: Review): number {
+    switch(rev.semester) {
+      case "Fall 2023": return 1;
+      case "Spring 2024": return 2;
+      case "Fall 2024": return 3;
+      case "Spring 2025": return 4;
+      case "Fall 2025": return 5;
+      case "Spring 2026": return 6;
+      default: return 0;
+    }
+  }
+
+  function hideNoSem(a: Review, b: Review) {
+    if (semesterToValue(a) === 0 && semesterToValue(b) !== 0) return 1
+    if (semesterToValue(b) === 0 && semesterToValue(a) !== 0) return -1
+    if (semesterToValue(a) === 0 && semesterToValue(b) === 0) return 0
+    return -2;
+  }
+
+  const professorOptions = useMemo(() => {
+  return Array.from(
+    new Set(
+      reviews
+        .map(rev => rev.professor_name?.trim())
+        .filter(Boolean)
+    )
+  );
+}, [reviews]);
+
+  const sortedReviews = reviews
+  .filter((rev) => {
+  if (profs) {
+    return rev.professor_name?.trim() === profs;
+  }
+  return true;
+})
+  .sort((a, b) => {
+    const nosem = hideNoSem(a, b);
+    if (sortBy === "rating-asc") return a.rating - b.rating;
+    if (sortBy === "rating-desc") return b.rating - a.rating;
+    if (sortBy === "sem-asc") {
+      return (nosem === -2? semesterToValue(a) - semesterToValue(b): nosem);
+    }
+    if (sortBy === "sem-desc") {
+      return (nosem === -2? semesterToValue(b) - semesterToValue(a): nosem);
+    }
+    if (sortBy === "professor") {
+      const nameA = a.professor_name || "";
+      const nameB = b.professor_name || "";
+      return nameA.localeCompare(nameB);
+    }
+    return 0;
+  });
+
+  function buttonText(sort) {
+    let ratingButton;
+    let semButton;
+    if (sort === 'rating-asc' || sort === 'rating-desc'){
+      sort === 'rating-asc' ? ratingButton = 'Rating ↑' : ratingButton = 'Rating ↓'
+      return ratingButton;
+    }
+    if (sort === 'sem-asc' || sort === 'sem-desc'){
+      sort === 'sem-asc' ? semButton = 'Semester ↑' : semButton = 'Semester ↓'
+      return semButton;
+    }
+    return 
+  }
 
   if (loading) {
     return (
@@ -732,19 +833,106 @@ export default function CourseDetailPage() {
               <span className="text-sm font-semibold text-gray-800">✦ AI Overview</span>
               <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">AI</span>
             </div>
-            {!aiOverview && !aiLoading && (
+            {!aiSummary && !aiLoading && !aiTooFew && (
               <button
-                onClick={fetchAiOverview}
+                onClick={() => fetchAiOverview(reviews[0]?.created_at, false, gradeDistribution)}
                 className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700"
               >
                 Generate
               </button>
             )}
+            {aiSummary && !aiLoading && (
+              <button
+                onClick={() => fetchAiOverview(reviews[0]?.created_at, true, gradeDistribution)}
+                className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1 rounded-lg"
+              >
+                Regenerate
+              </button>
+            )}
           </div>
+
           {aiLoading && <p className="text-sm text-gray-400">Summarizing reviews...</p>}
-          {aiOverview && <p className="text-sm text-gray-700 leading-relaxed">{aiOverview}</p>}
-          {!aiOverview && !aiLoading && (
+
+          {aiTooFew && !aiLoading && (
+            <p className="text-sm text-gray-400">Not enough written reviews to generate a summary yet.</p>
+          )}
+
+          {!aiSummary && !aiLoading && !aiTooFew && (
             <p className="text-sm text-gray-400">Click Generate to get an AI summary of all reviews.</p>
+          )}
+
+          {aiSummary && !aiLoading && (
+            <div className="flex flex-col gap-4">
+              {/* Evidence bar */}
+              <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                <span>Based on {aiSummary.total_reviews} reviews ({aiSummary.with_comments} with comments)</span>
+                <span className={`px-2 py-0.5 rounded-full font-medium ${
+                  aiSummary.confidence === "High" ? "bg-green-100 text-green-700" :
+                  aiSummary.confidence === "Medium" ? "bg-yellow-100 text-yellow-700" :
+                  "bg-red-100 text-red-600"
+                }`}>
+                  {aiSummary.confidence} confidence
+                </span>
+                {aiSummary.generated_at && (
+                  <span className="text-gray-400">
+                    Last updated {new Date(aiSummary.generated_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                  </span>
+                )}
+              </div>
+
+              {/* Overall sentiment */}
+              {aiSummary.overall_sentiment && (
+                <p className="text-sm text-gray-700 leading-relaxed">{aiSummary.overall_sentiment}</p>
+              )}
+
+              {/* Pros / Cons */}
+              <div className="grid grid-cols-2 gap-3">
+                {aiSummary.praises?.length > 0 && (
+                  <div className="bg-green-50 rounded-lg p-3">
+                    <p className="text-xs font-semibold text-green-700 mb-2">What students praise</p>
+                    <ul className="flex flex-col gap-1">
+                      {aiSummary.praises.map((p, i) => (
+                        <li key={i} className="text-xs text-gray-700 flex gap-1.5">
+                          <span className="text-green-500 mt-px">✓</span>{p}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {aiSummary.complaints?.length > 0 && (
+                  <div className="bg-red-50 rounded-lg p-3">
+                    <p className="text-xs font-semibold text-red-700 mb-2">Common complaints</p>
+                    <ul className="flex flex-col gap-1">
+                      {aiSummary.complaints.map((c, i) => (
+                        <li key={i} className="text-xs text-gray-700 flex gap-1.5">
+                          <span className="text-red-400 mt-px">✗</span>{c}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+
+              {/* Workload */}
+              {aiSummary.workload_summary && (
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <p className="text-xs font-semibold text-gray-600 mb-1">Workload snapshot</p>
+                  <p className="text-xs text-gray-700">{aiSummary.workload_summary}</p>
+                </div>
+              )}
+
+              {/* Fit */}
+              {(aiSummary.good_fit || aiSummary.poor_fit) && (
+                <div className="border-t border-gray-100 pt-3 flex flex-col gap-1">
+                  {aiSummary.good_fit && (
+                    <p className="text-xs text-gray-600"><span className="font-semibold text-gray-700">Good fit:</span> {aiSummary.good_fit}</p>
+                  )}
+                  {aiSummary.poor_fit && (
+                    <p className="text-xs text-gray-600"><span className="font-semibold text-gray-700">May struggle:</span> {aiSummary.poor_fit}</p>
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
 
@@ -753,11 +941,51 @@ export default function CourseDetailPage() {
           <h3 className="text-lg font-semibold text-gray-800 mb-4">
             {reviews.length} Review{reviews.length !== 1 ? "s" : ""}
           </h3>
+
+          {/*Sorting*/}
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-sm text-gray-500 font-medium">Sort:</span>
+            <button
+              onClick={() => {
+                setSortBy(sortBy === "rating-asc" ? "rating-desc" : "rating-asc");
+                lastSort = (sortBy === "rating-asc" ? "rating-desc" : "rating-asc");
+              }}
+              className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
+                (sortBy === "rating-asc" || sortBy === "rating-desc")
+                  ? "bg-blue-600 text-white border-blue-600 hover:border-blue-400"
+                  : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+              }`}
+            >
+              {sortBy === "rating-asc" || sortBy === "rating-desc"? buttonText(sortBy): 'Rating'}
+            </button>
+            <button
+              onClick={() => {
+                setSortBy(sortBy === "sem-asc" ? "sem-desc" : "sem-asc");
+                lastSort = (sortBy === "sem-asc" ? "sem-desc" : "sem-asc");
+              }}
+              className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
+                (sortBy === "sem-asc" || sortBy === "sem-desc")
+                  ? "bg-blue-600 text-white border-blue-600 hover:border-blue-400"
+                  : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+              }`}
+            >
+              {sortBy === "sem-asc" || sortBy === "sem-desc"? buttonText(sortBy): 'Semester'}
+            </button>
+            <div className="px-3 py-1.5 text-sm font-medium border rounded bg-white text-gray-700 border-gray-300 hover:border-gray-400">
+              <select onChange={(e) => setProfs(e.target.value)}>
+                <option value="">All Professors</option>
+                {professorOptions.map((prof) => (
+                  <option key={prof} value={prof}>{prof}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           {reviews.length === 0 ? (
             <p className="text-gray-400 text-sm">No reviews yet. Be the first!</p>
           ) : (
             <div className="flex flex-col gap-4">
-              {reviews.map((r) => (
+              {sortedReviews.map((r) => (
                 <ReviewCard
                   key={r.id}
                   review={r}

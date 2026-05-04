@@ -21,10 +21,20 @@ export default function RequestCourseModal({ open, onClose }: RequestCourseModal
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [subjectOptions, setSubjectOptions] = useState<string[]>([]);
 
   useEffect(() => {
     if (!open) return;
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    supabase
+      .from("course_metrics")
+      .select("department")
+      .then(({ data }) => {
+        if (data) {
+          const unique = Array.from(new Set(data.map((r: { department: string }) => r.department).filter(Boolean))).sort();
+          setSubjectOptions(unique as string[]);
+        }
+      });
   }, [open]);
 
   useEffect(() => {
@@ -151,14 +161,16 @@ export default function RequestCourseModal({ open, onClose }: RequestCourseModal
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Subject</label>
-                <input
-                  type="text"
+                <select
                   value={subject}
                   onChange={(e) => setSubject(e.target.value)}
-                  placeholder="e.g. CS"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900"
-                  autoComplete="off"
-                />
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 bg-white"
+                >
+                  <option value="">Select subject...</option>
+                  {subjectOptions.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Course number</label>
