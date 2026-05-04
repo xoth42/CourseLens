@@ -16,12 +16,36 @@ export type CourseListItem = {
 
 type CourseSummaryCardProps = {
   course: CourseListItem;
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (courseId: number) => void;
 };
 
-export default function CourseSummaryCard({ course }: CourseSummaryCardProps) {
+export default function CourseSummaryCard({
+  course,
+  selectable = false,
+  selected = false,
+  onToggleSelect,
+}: CourseSummaryCardProps) {
   return (
     <div className="relative rounded-xl border border-gray-200 bg-white shadow-sm transition-shadow hover:shadow-md">
-      <Link href={`/courses/${course.id}`} className="block p-5 pr-14">
+      {selectable && (
+        <label
+          className="absolute left-3 top-3 z-10 inline-flex cursor-pointer items-center"
+          aria-label={`Select ${course.code} for comparison`}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onClick={(e) => e.stopPropagation()}
+            onChange={() => onToggleSelect?.(course.id)}
+            className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+        </label>
+      )}
+      <Link href={`/courses/${course.id}`} className={`block p-5 pr-14 ${selectable ? "pl-24" : ""}`}>
         <div className="flex items-start justify-between">
           <div>
             <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-700">
