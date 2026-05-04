@@ -29,7 +29,11 @@ export default function RequestCourseModal({ open, onClose }: RequestCourseModal
     supabase
       .from("course_metrics")
       .select("department")
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (error) {
+          console.error("Failed to load subjects:", error);
+          return;
+        }
         if (data) {
           const unique = Array.from(new Set(data.map((r: { department: string }) => r.department).filter(Boolean))).sort();
           setSubjectOptions(unique as string[]);

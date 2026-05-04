@@ -5,6 +5,7 @@ import type { Key, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { gpaToLetter } from "@/lib/gpa";
+import { formatCredits } from "@/lib/courseFormat";
 import type { Course } from "@/types/course";
 
 const MAX_COMPARE = 4;
@@ -429,7 +430,10 @@ export default function CourseCompareView({ initialSelectedIds }: CourseCompareV
                   key={c.id}
                   className="border-b border-emerald-100/80 bg-slate-50 px-3.5 py-3 text-sm text-slate-800"
                 >
-                  <Link href={`/courses/${c.id}`} className="font-bold text-blue-600 hover:underline">
+                  <Link
+                    href={`/courses/${c.id}`}
+                    className="font-bold text-blue-600 hover:underline"
+                  >
                     {c.code}
                   </Link>
                   <div className="mt-0.5 text-xs font-normal text-slate-500">{c.professor}</div>
@@ -449,6 +453,19 @@ export default function CourseCompareView({ initialSelectedIds }: CourseCompareV
                   bestGpa.includes(idx)
                 )
               )}
+            </tr>
+            <tr>
+              <td className="sticky left-0 z-[1] border-b border-emerald-100/80 bg-slate-50/95 px-3.5 py-3 text-sm font-bold text-emerald-900">
+                Credits
+              </td>
+              {compared.map((c) => (
+                <td
+                  key={c.id}
+                  className="border-b border-emerald-100/80 px-3.5 py-3 text-sm font-semibold text-slate-800"
+                >
+                  {formatCredits(c.credits, c.max_credits)}
+                </td>
+              ))}
             </tr>
             <tr>
               <td className="sticky left-0 z-[1] border-b border-emerald-100/80 bg-slate-50/95 px-3.5 py-3 text-sm font-bold text-emerald-900">
@@ -475,19 +492,25 @@ export default function CourseCompareView({ initialSelectedIds }: CourseCompareV
               <td className="sticky left-0 z-[1] border-b border-emerald-100/80 bg-slate-50/95 px-3.5 py-3 text-sm font-bold text-emerald-900">
                 Overall rating
               </td>
-              {compared.map((c, idx) => cell(c.id, `${c.rating.toFixed(1)} / 5`, bestRating.includes(idx)))}
+              {compared.map((c, idx) =>
+                cell(c.id, `${c.rating.toFixed(1)} / 5`, bestRating.includes(idx))
+              )}
             </tr>
             <tr>
               <td className="sticky left-0 z-[1] border-b border-emerald-100/80 bg-slate-50/95 px-3.5 py-3 text-sm font-bold text-emerald-900">
                 Difficulty
               </td>
-              {compared.map((c, idx) => cell(c.id, `${c.difficulty.toFixed(1)} / 5`, bestDiff.includes(idx)))}
+              {compared.map((c, idx) =>
+                cell(c.id, `${c.difficulty.toFixed(1)} / 5`, bestDiff.includes(idx))
+              )}
             </tr>
             <tr>
               <td className="sticky left-0 z-[1] bg-slate-50/95 px-3.5 py-3 text-sm font-bold text-emerald-900">
                 Reviews
               </td>
-              {compared.map((c, idx) => cell(c.id, String(c.reviews), bestReviews.includes(idx)))}
+              {compared.map((c, idx) =>
+                cell(c.id, String(c.reviews), bestReviews.includes(idx))
+              )}
             </tr>
           </tbody>
         </table>
@@ -566,7 +589,6 @@ export default function CourseCompareView({ initialSelectedIds }: CourseCompareV
               {courses.length} course{courses.length === 1 ? "" : "s"} — metrics and evaluation-based charts.
             </p>
           </header>
-
           <ComparisonTable />
         </section>
       </main>
@@ -606,7 +628,10 @@ export default function CourseCompareView({ initialSelectedIds }: CourseCompareV
                   const max = Math.max(...modal.values, 1);
                   const h = Math.max(8, Math.round((value / max) * 170));
                   return (
-                    <div key={i} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1.5">
+                    <div
+                      key={i}
+                      className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1.5"
+                    >
                       <span
                         className="w-full max-w-[56px] rounded-t-lg bg-gradient-to-b from-sky-400 to-blue-600"
                         style={{ height: `${h}px` }}

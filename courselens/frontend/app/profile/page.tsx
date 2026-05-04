@@ -35,6 +35,7 @@ export default function Profile() {
     }, []);
 
     useEffect(() => {
+    if (!email) return;
     async function fetchStudentId() {
       const { data, error } = await supabase
         .from("student_profiles")

@@ -321,7 +321,7 @@ function RequestCard({
           <div className="flex-1 min-w-0">
             <div className="flex flex-wrap items-center gap-2 mb-1">
               <span className="text-base font-bold text-gray-900">
-                {req.subject.toUpperCase()}{req.course_number}
+                {req.subject.toUpperCase()} {req.course_number}
               </span>
               <span className="text-base text-gray-700">{req.class_name}</span>
             </div>

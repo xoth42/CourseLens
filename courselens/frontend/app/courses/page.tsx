@@ -1,27 +1,25 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase/client";
+import { Listbox, ListboxButton, ListboxOption, ListboxOptions } from "@headlessui/react";
 import CourseSummaryCard, { type CourseListItem } from "@/components/CourseSummaryCard";
 import RequestCourseModal from "@/components/RequestCourseModal";
+import { Slider } from "@/components/Slider";
+import { supabase } from "@/lib/supabase/client";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
 const MAX_COMPARE = 4;
 
-type SortKey =
+type SortBy =
   | ""
-  | "code-asc"
-  | "code-desc"
-  | "a-z"
-  | "z-a"
-  | "name-a-z"
-  | "name-z-a"
-  | "rating-asc"
-  | "rating-desc"
-  | "diff-asc"
-  | "diff-desc"
-  | "gpa-asc"
-  | "gpa-desc";
+  | "code"
+  | "name"
+  | "rating"
+  | "difficulty"
+  | "gpa"
+  | "credits";
+
+type SortDirection = "asc" | "desc";
 
 type Course = CourseListItem & {
   id: number;
@@ -30,27 +28,29 @@ type Course = CourseListItem & {
   professor: string;
   rating: number;
   difficulty: number;
-  avg_gpa: number;
   reviews: number;
   department: string;
   college: string | null;
+  avg_gpa: number;
+  credits?: number | null;
+  max_credits?: number | null;
 };
 
 // Maps raw SPIRE college names to short user-facing labels for the dropdown.
 // Strip "College of" / "School of" prefixes and named honorifics (Manning, Isenberg).
 const COLLEGE_DISPLAY: Record<string, string> = {
-  "College of Education": "Education",
-  "College of Engineering": "Engineering",
-  "College of Humanities & Fine Arts": "Humanities & Fine Arts",
-  "College of Natural Sciences": "Natural Sciences",
-  "College of Social & Behavioral Sciences": "Social & Behavioral Sciences",
-  "Isenberg School of Management": "Management",
+  "College of Education":                              "Education",
+  "College of Engineering":                            "Engineering",
+  "College of Humanities & Fine Arts":                 "Humanities & Fine Arts",
+  "College of Natural Sciences":                       "Natural Sciences",
+  "College of Social & Behavioral Sciences":           "Social & Behavioral Sciences",
+  "Isenberg School of Management":                     "Management",
   "Manning College of Information & Computer Sciences": "Information & Computer Sciences",
-  "School of Nursing": "Nursing",
-  "School of Public Health & Health Sciences": "Public Health & Health Sciences",
-  "Other Credit Offerings": "Other",
-  "Non-Credit Offerings (thru CE)": "Other",
-  "Equivalency (Pseudo) Courses": "Other",
+  "School of Nursing":                                 "Nursing",
+  "School of Public Health & Health Sciences":         "Public Health & Health Sciences",
+  "Other Credit Offerings":                            "Other",
+  "Non-Credit Offerings (thru CE)":                    "Other",
+  "Equivalency (Pseudo) Courses":                      "Other",
 };
 
 function collegeLabel(raw: string): string {
@@ -60,12 +60,12 @@ function collegeLabel(raw: string): string {
 // Common abbreviations students use that differ significantly from SPIRE subject codes.
 // Order matters: longer abbreviations must come before shorter prefixes (e.g. "stats" before "stat").
 const SUBJECT_SHORTHANDS: [abbr: string, full: string][] = [
-  ["cs", "compsci"], // CS → COMPSCI
-  ["ece", "e&c-eng"], // ECE → Electrical & Computer Engineering
-  ["bme", "bmed-eng"], // BME → Biomedical Engineering
-  ["stats", "statistc"], // stats → STATISTC (odd SPIRE code)
-  ["stat", "statistc"], // stat  → STATISTC
-  ["mie", "m&i-eng"], // MIE  → Mechanical & Industrial Engineering
+  ["cs",    "compsci"],   // CS → COMPSCI
+  ["ece",   "e&c-eng"],   // ECE → Electrical & Computer Engineering
+  ["bme",   "bmed-eng"],  // BME → Biomedical Engineering
+  ["stats", "statistc"],  // stats → STATISTC (odd SPIRE code)
+  ["stat",  "statistc"],  // stat  → STATISTC
+  ["mie",   "m&i-eng"],   // MIE  → Mechanical & Industrial Engineering
 ];
 
 // Returns [original, expanded?].
@@ -101,22 +101,6 @@ function scoreMatch(course: Course, terms: string[]): number {
   return 0;
 }
 
-function buttonText(sort: SortKey): string {
-  if (sort === "a-z") return "Code A-Z ↑";
-  if (sort === "z-a") return "Code A-Z ↓";
-  if (sort === "name-a-z") return "Name ↑";
-  if (sort === "name-z-a") return "Name ↓";
-  if (sort === "code-asc") return "Code ↑";
-  if (sort === "code-desc") return "Code ↓";
-  if (sort === "rating-asc") return "Rating ↑";
-  if (sort === "rating-desc") return "Rating ↓";
-  if (sort === "diff-asc") return "Difficulty ↑";
-  if (sort === "diff-desc") return "Difficulty ↓";
-  if (sort === "gpa-asc") return "Avg Grade ↑";
-  if (sort === "gpa-desc") return "Avg Grade ↓";
-  return "";
-}
-
 function hideUnrated(a: Course, b: Course, prop: "rating" | "difficulty" | "avg_gpa"): number {
   const av = a[prop];
   const bv = b[prop];
@@ -126,6 +110,16 @@ function hideUnrated(a: Course, b: Course, prop: "rating" | "difficulty" | "avg_
   return -2;
 }
 
+function sortByLabel(field: SortBy): string {
+  if (field === "code") return "Code A-Z";
+  if (field === "name") return "Name";
+  if (field === "rating") return "Rating";
+  if (field === "difficulty") return "Difficulty";
+  if (field === "gpa") return "Avg Grade";
+  if (field === "credits") return "Credits";
+  return "Sort by...";
+}
+
 export default function CoursesPage() {
   const router = useRouter();
   const [courses, setCourses] = useState<Course[]>([]);
@@ -133,12 +127,12 @@ export default function CoursesPage() {
   const [search, setSearch] = useState("");
   const [college, setCollege] = useState("");
   const [department, setDepartment] = useState("");
-  const [courseLevels, setCourseLevels] = useState<Set<number>>(new Set());
-  const [courseLevelsOpen, setCourseLevelsOpen] = useState(false);
+  const [sortBy, setSortBy] = useState<SortBy>("");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const [creditsRange, setCreditsRange] = useState<[number, number]>([1, 6]);
+  const [courseLevelRange, setCourseLevelRange] = useState<[number, number]>([100, 600]);
   const [selectedForCompare, setSelectedForCompare] = useState<Set<number>>(new Set());
-  const [sortBy, setSortBy] = useState<SortKey>("a-z");
   const [requestModalOpen, setRequestModalOpen] = useState(false);
-
 
   useEffect(() => {
     async function fetchCourses() {
@@ -149,16 +143,11 @@ export default function CoursesPage() {
     fetchCourses();
   }, []);
 
-  function getCourseNumber(code: string): number {
-    const match = code.match(/\d+/);
-    return match ? parseInt(match[0], 10) : 0;
-  }
-
-  // Extract course level from course code (e.g., "CS230" → 200)
+  // Normalize raw numeric course codes into level buckets.
   function getCourseLevel(code: string): number | null {
     const match = code.match(/\d+/);
     if (!match) return null;
-    const num = parseInt(match[0], 10);
+    const num = parseInt(match[0]);
     if (num < 100) return null;
     if (num < 200) return 100;
     if (num < 300) return 200;
@@ -168,14 +157,6 @@ export default function CoursesPage() {
     return 600;
   }
 
-  // Get available course levels from current courses
-  const availableCourseLevels = Array.from(
-    new Set(
-      courses
-        .map((c) => getCourseLevel(c.code))
-        .filter((level): level is number => level !== null)
-    )
-  ).sort((a, b) => a - b);
   const collegeOptions = Array.from(
     new Set(
       courses
@@ -192,78 +173,26 @@ export default function CoursesPage() {
     )
   ).sort();
 
+  // Check if a course matches the credit filter range
+  function matchesCreditsFilter(course: Course, [minCredits, maxCredits]: [number, number]): boolean {
+    if (typeof course.credits !== "number") return true;
+
+    if (typeof course.max_credits === "number") {
+      return !(course.max_credits < minCredits || course.credits > maxCredits);
+    }
+
+    return course.credits >= minCredits && course.credits <= maxCredits;
+  }
+
+  // Check if a course level falls within the selected range
+  function matchesCourseLevelFilter(courseLevel: number | null, [minLevel, maxLevel]: [number, number]): boolean {
+    if (courseLevel === null) return false;
+    return courseLevel >= minLevel && courseLevel <= maxLevel;
+  }
+
   function handleCollegeChange(next: string) {
     setCollege(next);
     setDepartment("");
-  }
-
-  const searchTerms = search.trim() ? expandSearch(search) : [];
-
-  const filteredCourses = courses
-    .filter((course) => {
-      const lName = course.name.toLowerCase();
-      const lCode = course.code.toLowerCase();
-      const lProf = course.professor.toLowerCase();
-      const matchesSearch =
-        !search.trim() ||
-        searchTerms.some((term) => lName.includes(term) || lCode.includes(term) || lProf.includes(term));
-
-      const matchesCollege =
-        college === "" || (course.college !== null && collegeLabel(course.college) === college);
-
-      const matchesDepartment = department === "" || course.department === department;
-
-      const courseLevel = getCourseLevel(course.code);
-      const matchesLevel =
-        courseLevels.size === 0 || (courseLevel !== null && courseLevels.has(courseLevel));
-
-      return matchesSearch && matchesCollege && matchesDepartment && matchesLevel;
-    })
-    .sort((a, b) => {
-      if (sortBy === "code-asc") return getCourseNumber(a.code) - getCourseNumber(b.code);
-      if (sortBy === "code-desc") return getCourseNumber(b.code) - getCourseNumber(a.code);
-      if (sortBy === "a-z") return a.code.localeCompare(b.code);
-      if (sortBy === "z-a") return b.code.localeCompare(a.code);
-      if (sortBy === "name-a-z") return a.name.localeCompare(b.name);
-      if (sortBy === "name-z-a") return b.name.localeCompare(a.name);
-      const noratings = hideUnrated(a, b, "rating");
-      const nodiff = hideUnrated(a, b, "difficulty");
-      const nogpa = hideUnrated(a, b, "avg_gpa");
-      if (sortBy === "rating-asc") {
-        return noratings === -2 ? a.rating - b.rating : noratings;
-      }
-      if (sortBy === "rating-desc") {
-        return noratings === -2 ? b.rating - a.rating : noratings;
-      }
-      if (sortBy === "diff-asc") {
-        return nodiff === -2 ? a.difficulty - b.difficulty : nodiff;
-      }
-      if (sortBy === "diff-desc") {
-        return nodiff === -2 ? b.difficulty - a.difficulty : nodiff;
-      }
-      if (sortBy === "gpa-asc") {
-        return nogpa === -2 ? a.avg_gpa - b.avg_gpa : nogpa;
-      }
-      if (sortBy === "gpa-desc") {
-        return nogpa === -2 ? b.avg_gpa - a.avg_gpa : nogpa;
-      }
-      if (!search.trim()) return 0;
-      return scoreMatch(b, searchTerms) - scoreMatch(a, searchTerms);
-    });
-
-  function toggleCourseLevel(level: number) {
-    const newLevels = new Set(courseLevels);
-    if (newLevels.has(level)) {
-      newLevels.delete(level);
-    } else {
-      newLevels.add(level);
-    }
-    setCourseLevels(newLevels);
-  }
-
-  function getLevelLabel(level: number): string {
-    if (level === 600) return "600+";
-    return `${level}`;
   }
 
   function toggleCompare(courseId: number) {
@@ -290,9 +219,78 @@ export default function CoursesPage() {
     .map((id) => courses.find((c) => c.id === id))
     .filter((c): c is Course => c != null);
 
+  const searchTerms = search.trim() ? expandSearch(search) : [];
+
+  const filteredCourses = courses
+    .filter((course) => {
+      const lName = course.name.toLowerCase();
+      const lCode = course.code.toLowerCase();
+      const lProf = course.professor.toLowerCase();
+      const matchesSearch =
+        !search.trim() ||
+        searchTerms.some((term) => lName.includes(term) || lCode.includes(term) || lProf.includes(term));
+
+      const matchesCollege =
+        college === "" || (course.college !== null && collegeLabel(course.college) === college);
+
+      const matchesDepartment = department === "" || course.department === department;
+
+      const courseLevel = getCourseLevel(course.code);
+      const matchesLevel = matchesCourseLevelFilter(courseLevel, courseLevelRange);
+
+      const matchesCredits = matchesCreditsFilter(course, creditsRange);
+
+      return matchesSearch && matchesCollege && matchesDepartment && matchesLevel && matchesCredits;
+    })
+    .sort((a, b) => {
+      if (sortBy === "code") {
+        const diff = a.code.localeCompare(b.code);
+        return sortDirection === "asc" ? diff : -diff;
+      }
+
+      if (sortBy === "name") {
+        const diff = a.name.localeCompare(b.name);
+        return sortDirection === "asc" ? diff : -diff;
+      }
+
+      if (sortBy === "rating") {
+        const unrated = hideUnrated(a, b, "rating");
+        if (unrated !== -2) return unrated;
+        const diff = a.rating - b.rating;
+        return sortDirection === "asc" ? diff : -diff;
+      }
+
+      if (sortBy === "difficulty") {
+        const unrated = hideUnrated(a, b, "difficulty");
+        if (unrated !== -2) return unrated;
+        const diff = a.difficulty - b.difficulty;
+        return sortDirection === "asc" ? diff : -diff;
+      }
+
+      if (sortBy === "gpa") {
+        const unrated = hideUnrated(a, b, "avg_gpa");
+        if (unrated !== -2) return unrated;
+        const diff = a.avg_gpa - b.avg_gpa;
+        return sortDirection === "asc" ? diff : -diff;
+      }
+
+      if (sortBy === "credits") {
+        const aVal = typeof a.max_credits === "number" ? a.max_credits : (a.credits ?? 0);
+        const bVal = typeof b.max_credits === "number" ? b.max_credits : (b.credits ?? 0);
+        const diff = sortDirection === "asc" ? aVal - bVal : bVal - aVal;
+        if (diff !== 0) return diff;
+        const aHasRange = typeof a.max_credits === "number" ? 1 : 0;
+        const bHasRange = typeof b.max_credits === "number" ? 1 : 0;
+        return aHasRange - bHasRange;
+      }
+
+      if (!search.trim()) return 0;
+      return scoreMatch(b, searchTerms) - scoreMatch(a, searchTerms);
+    });
+
   return (
     <div className="min-h-full flex-1 bg-gray-50 pb-32">
-      <main className="mx-auto max-w-4xl px-4 py-8">
+      <div className="mx-auto max-w-7xl px-4 py-8">
         <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-xl font-semibold text-gray-800">Browse Courses</h2>
           <div className="flex flex-wrap items-center gap-2">
@@ -308,162 +306,252 @@ export default function CoursesPage() {
 
         <RequestCourseModal open={requestModalOpen} onClose={() => setRequestModalOpen(false)} />
 
-        <div className="mb-4 flex flex-col flex-wrap gap-3 sm:flex-row">
+        <div className="mb-4">
           <input
             type="text"
             placeholder="Search by name, code, or professor..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="min-w-48 flex-1 rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <select
-            value={college}
-            onChange={(e) => handleCollegeChange(e.target.value)}
-            className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none"
-          >
-            <option value="">Select College</option>
-            {collegeOptions.map((col) => (
-              <option key={col} value={col}>
-                {col}
-              </option>
-            ))}
-          </select>
-          <select
-            value={department}
-            onChange={(e) => setDepartment(e.target.value)}
-            className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none"
-          >
-            <option value="">Select Department</option>
-            {departmentOptions.map((dept) => (
-              <option key={dept} value={dept}>
-                {dept}
-              </option>
-            ))}
-          </select>
         </div>
 
-        {/* Sort Controls */}
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium text-gray-500">Sort:</span>
-          <button
-            type="button"
-            onClick={() => setSortBy(sortBy === "a-z" ? "z-a" : "a-z")}
-            className={`rounded border px-3 py-1.5 text-sm font-medium transition-colors ${
-              sortBy === "a-z" || sortBy === "z-a"
-                ? "border-blue-600 bg-blue-600 text-white hover:border-blue-400"
-                : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
-            }`}
-          >
-            {sortBy === "a-z" || sortBy === "z-a" ? buttonText(sortBy) : "Code A-Z"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setSortBy(sortBy === "name-a-z" ? "name-z-a" : "name-a-z")}
-            className={`rounded border px-3 py-1.5 text-sm font-medium transition-colors ${
-              sortBy === "name-a-z" || sortBy === "name-z-a"
-                ? "border-blue-600 bg-blue-600 text-white hover:border-blue-400"
-                : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
-            }`}
-          >
-            {sortBy === "name-a-z" || sortBy === "name-z-a" ? buttonText(sortBy) : "Name"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setSortBy(sortBy === "code-asc" ? "code-desc" : "code-asc")}
-            className={`rounded border px-3 py-1.5 text-sm font-medium transition-colors ${
-              sortBy === "code-asc" || sortBy === "code-desc"
-                ? "border-blue-600 bg-blue-600 text-white hover:border-blue-400"
-                : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
-            }`}
-          >
-            {sortBy === "code-asc" || sortBy === "code-desc" ? buttonText(sortBy) : "Code"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setSortBy(sortBy === "rating-asc" ? "rating-desc" : "rating-asc")}
-            className={`rounded border px-3 py-1.5 text-sm font-medium transition-colors ${
-              sortBy === "rating-asc" || sortBy === "rating-desc"
-                ? "border-blue-600 bg-blue-600 text-white hover:border-blue-400"
-                : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
-            }`}
-          >
-            {sortBy === "rating-asc" || sortBy === "rating-desc" ? buttonText(sortBy) : "Rating"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setSortBy(sortBy === "diff-asc" ? "diff-desc" : "diff-asc")}
-            className={`rounded border px-3 py-1.5 text-sm font-medium transition-colors ${
-              sortBy === "diff-asc" || sortBy === "diff-desc"
-                ? "border-blue-600 bg-blue-600 text-white hover:border-blue-400"
-                : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
-            }`}
-          >
-            {sortBy === "diff-asc" || sortBy === "diff-desc" ? buttonText(sortBy) : "Difficulty"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setSortBy(sortBy === "gpa-asc" ? "gpa-desc" : "gpa-asc")}
-            className={`rounded border px-3 py-1.5 text-sm font-medium transition-colors ${
-              sortBy === "gpa-asc" || sortBy === "gpa-desc"
-                ? "border-blue-600 bg-blue-600 text-white hover:border-blue-400"
-                : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
-            }`}
-          >
-            {sortBy === "gpa-asc" || sortBy === "gpa-desc" ? buttonText(sortBy) : "Avg Grade"}
-          </button>
-        </div>
+        <div className="flex flex-col gap-6 lg:flex-row">
+          <aside className="w-full rounded-xl border border-gray-200 bg-white p-4 shadow-sm lg:sticky lg:top-4 lg:h-fit lg:w-72">
+            <h3 className="mb-4 text-lg font-semibold text-gray-800">Filters</h3>
 
-        {/* Course Level Filter Section */}
-        <div className="mb-4 border-b border-gray-200">
-          <button
-            type="button"
-            onClick={() => setCourseLevelsOpen(!courseLevelsOpen)}
-            className="flex w-full justify-between px-0 py-3 text-left font-semibold text-gray-800 transition-colors hover:text-gray-600"
-          >
-            <span>Course Level</span>
-            <span className="text-xl">{courseLevelsOpen ? "−" : "+"}</span>
-          </button>
-          {courseLevelsOpen && (
-            <div className="flex flex-wrap gap-2 pb-3">
-              {availableCourseLevels.map((level) => (
-                <button
-                  key={level}
-                  type="button"
-                  onClick={() => toggleCourseLevel(level)}
-                  className={`rounded border px-3 py-2 text-sm font-medium transition-colors ${
-                    courseLevels.has(level)
-                      ? "border-blue-600 bg-blue-600 text-white"
-                      : "border-gray-300 bg-white text-gray-700 hover:border-gray-400"
-                  }`}
+            <div className="mb-5">
+              <label className="mb-2 block text-sm font-medium text-gray-700">College</label>
+              <Listbox value={college} onChange={handleCollegeChange}>
+                <ListboxButton className="flex w-full items-center justify-between rounded-lg border border-gray-300 px-3 py-2 text-left text-sm text-gray-900 transition-colors hover:bg-gray-50 data-open:bg-gray-50">
+                  {college || "All Colleges"}
+                  <span className="text-lg">▼</span>
+                </ListboxButton>
+                <ListboxOptions
+                  anchor="bottom"
+                  transition
+                  className="z-10 origin-top rounded-lg border border-gray-200 bg-white p-1 shadow-lg transition duration-200 ease-out data-closed:scale-95 data-closed:opacity-0"
                 >
-                  {getLevelLabel(level)}
-                </button>
-              ))}
+                  <ListboxOption
+                    value=""
+                    className="cursor-pointer rounded px-3 py-2 text-sm text-gray-900 transition-colors data-focus:bg-blue-50"
+                  >
+                    All Colleges
+                  </ListboxOption>
+                  {collegeOptions.map((col) => (
+                    <ListboxOption
+                      key={col}
+                      value={col}
+                      className="cursor-pointer rounded px-3 py-2 text-sm text-gray-900 transition-colors data-focus:bg-blue-50"
+                    >
+                      {col}
+                    </ListboxOption>
+                  ))}
+                </ListboxOptions>
+              </Listbox>
             </div>
-          )}
-        </div>
-        <p className="mb-4 text-sm text-gray-400">
-          {loading ? "Loading..." : `${filteredCourses.length} course${filteredCourses.length !== 1 ? "s" : ""} found`}
-        </p>
 
-        <div className="flex flex-col gap-4">
-          {loading ? (
-            <p className="py-16 text-center text-gray-400">Loading courses...</p>
-          ) : filteredCourses.length === 0 ? (
-            <p className="py-16 text-center text-gray-400">No courses match your search.</p>
-          ) : (
-            filteredCourses.map((course) => (
-              <CourseSummaryCard
-                key={course.id}
-                course={course}
-                selectable
-                selected={selectedForCompare.has(course.id)}
-                onToggleSelect={toggleCompare}
-              />
-            ))
-          )}
+            <div className="mb-5">
+              <label className="mb-2 block text-sm font-medium text-gray-700">Department</label>
+              <Listbox value={department} onChange={setDepartment}>
+                <ListboxButton className="flex w-full items-center justify-between rounded-lg border border-gray-300 px-3 py-2 text-left text-sm text-gray-900 transition-colors hover:bg-gray-50 data-open:bg-gray-50">
+                  {department || "All Departments"}
+                  <span className="text-lg">▼</span>
+                </ListboxButton>
+                <ListboxOptions
+                  anchor="bottom"
+                  transition
+                  className="z-10 origin-top rounded-lg border border-gray-200 bg-white p-1 shadow-lg transition duration-200 ease-out data-closed:scale-95 data-closed:opacity-0"
+                >
+                  <ListboxOption
+                    value=""
+                    className="cursor-pointer rounded px-3 py-2 text-sm text-gray-900 transition-colors data-focus:bg-blue-50"
+                  >
+                    All Departments
+                  </ListboxOption>
+                  {departmentOptions.map((dept) => (
+                    <ListboxOption
+                      key={dept}
+                      value={dept}
+                      className="cursor-pointer rounded px-3 py-2 text-sm text-gray-900 transition-colors data-focus:bg-blue-50"
+                    >
+                      {dept}
+                    </ListboxOption>
+                  ))}
+                </ListboxOptions>
+              </Listbox>
+            </div>
+
+            <div className="mb-4 space-y-3 border-t border-gray-200 pt-4">
+              <Listbox value={sortBy} onChange={setSortBy}>
+                <ListboxButton className="flex w-full items-center justify-between rounded-lg border border-gray-300 px-3 py-2 text-left text-sm text-gray-900 transition-colors hover:bg-gray-50 data-open:bg-gray-50">
+                  {sortByLabel(sortBy)}
+                  <span className="text-lg">▼</span>
+                </ListboxButton>
+                <ListboxOptions
+                  anchor="bottom"
+                  transition
+                  className="z-10 origin-top rounded-lg border border-gray-200 bg-white p-1 shadow-lg transition duration-200 ease-out data-closed:scale-95 data-closed:opacity-0"
+                >
+                  <ListboxOption
+                    value=""
+                    className="cursor-pointer rounded px-3 py-2 text-sm text-gray-900 transition-colors data-focus:bg-blue-50"
+                  >
+                    None
+                  </ListboxOption>
+                  <ListboxOption
+                    value="code"
+                    className="cursor-pointer rounded px-3 py-2 text-sm text-gray-900 transition-colors data-focus:bg-blue-50"
+                  >
+                    Code A-Z
+                  </ListboxOption>
+                  <ListboxOption
+                    value="name"
+                    className="cursor-pointer rounded px-3 py-2 text-sm text-gray-900 transition-colors data-focus:bg-blue-50"
+                  >
+                    Name
+                  </ListboxOption>
+                  <ListboxOption
+                    value="rating"
+                    className="cursor-pointer rounded px-3 py-2 text-sm text-gray-900 transition-colors data-focus:bg-blue-50"
+                  >
+                    Rating
+                  </ListboxOption>
+                  <ListboxOption
+                    value="difficulty"
+                    className="cursor-pointer rounded px-3 py-2 text-sm text-gray-900 transition-colors data-focus:bg-blue-50"
+                  >
+                    Difficulty
+                  </ListboxOption>
+                  <ListboxOption
+                    value="gpa"
+                    className="cursor-pointer rounded px-3 py-2 text-sm text-gray-900 transition-colors data-focus:bg-blue-50"
+                  >
+                    Avg Grade
+                  </ListboxOption>
+                  <ListboxOption
+                    value="credits"
+                    className="cursor-pointer rounded px-3 py-2 text-sm text-gray-900 transition-colors data-focus:bg-blue-50"
+                  >
+                    Credits
+                  </ListboxOption>
+                </ListboxOptions>
+              </Listbox>
+
+              {sortBy && (
+                <Listbox value={sortDirection} onChange={setSortDirection}>
+                  <ListboxButton className="flex w-full items-center justify-between rounded-lg border border-gray-300 px-3 py-2 text-left text-sm text-gray-900 transition-colors hover:bg-gray-50 data-open:bg-gray-50">
+                    {sortDirection === "asc" ? "↑ Ascending" : "↓ Descending"}
+                    <span className="text-lg">▼</span>
+                  </ListboxButton>
+                  <ListboxOptions
+                    anchor="bottom"
+                    transition
+                    className="z-10 origin-top rounded-lg border border-gray-200 bg-white p-1 shadow-lg transition duration-200 ease-out data-closed:scale-95 data-closed:opacity-0"
+                  >
+                    <ListboxOption
+                      value="asc"
+                      className="cursor-pointer rounded px-3 py-2 text-sm text-gray-900 transition-colors data-focus:bg-blue-50"
+                    >
+                      ↑ Ascending
+                    </ListboxOption>
+                    <ListboxOption
+                      value="desc"
+                      className="cursor-pointer rounded px-3 py-2 text-sm text-gray-900 transition-colors data-focus:bg-blue-50"
+                    >
+                      ↓ Descending
+                    </ListboxOption>
+                  </ListboxOptions>
+                </Listbox>
+              )}
+            </div>
+
+            <div className="relative mb-4 border-t border-gray-200 pt-4">
+              <Listbox value="" onChange={() => {}}>
+                <ListboxButton className="flex w-full items-center justify-between rounded-lg px-3 py-3 text-left font-semibold text-gray-800 transition-colors hover:bg-gray-100 data-open:bg-gray-100">
+                  <span className="text-sm">
+                    Credits: {creditsRange[0]}-{creditsRange[1] === 6 ? "6+" : creditsRange[1]}
+                  </span>
+                  <span className="text-lg">▼</span>
+                </ListboxButton>
+                <ListboxOptions
+                  anchor="bottom"
+                  transition
+                  className="z-10 origin-top rounded-lg border border-gray-200 bg-white p-4 shadow-lg transition duration-200 ease-out data-closed:scale-95 data-closed:opacity-0"
+                >
+                  <div className="pointer-events-auto w-48">
+                    <div className="mb-3 text-center text-sm font-medium text-gray-600">
+                      {creditsRange[0]} - {creditsRange[1] === 6 ? "6+" : creditsRange[1]}
+                    </div>
+                    <Slider
+                      value={creditsRange}
+                      onValueChange={(v) => setCreditsRange([v[0], v[1]])}
+                      min={1}
+                      max={6}
+                      step={1}
+                      minStepsBetweenThumbs={0}
+                    />
+                  </div>
+                </ListboxOptions>
+              </Listbox>
+            </div>
+
+            <div className="relative border-t border-gray-200 pt-4">
+              <Listbox value="" onChange={() => {}}>
+                <ListboxButton className="flex w-full items-center justify-between rounded-lg px-3 py-3 text-left font-semibold text-gray-800 transition-colors hover:bg-gray-100 data-open:bg-gray-100">
+                  <span className="text-sm">
+                    Level: {courseLevelRange[0]}-{courseLevelRange[1] === 600 ? "600+" : courseLevelRange[1]}
+                  </span>
+                  <span className="text-lg">▼</span>
+                </ListboxButton>
+                <ListboxOptions
+                  anchor="bottom"
+                  transition
+                  className="z-10 origin-top rounded-lg border border-gray-200 bg-white p-4 shadow-lg transition duration-200 ease-out data-closed:scale-95 data-closed:opacity-0"
+                >
+                  <div className="pointer-events-auto w-48">
+                    <div className="mb-3 text-center text-sm font-medium text-gray-600">
+                      {courseLevelRange[0]} - {courseLevelRange[1] === 600 ? "600+" : courseLevelRange[1]}
+                    </div>
+                    <Slider
+                      value={courseLevelRange}
+                      onValueChange={(v) => setCourseLevelRange([v[0], v[1]])}
+                      min={100}
+                      max={600}
+                      step={100}
+                      minStepsBetweenThumbs={0}
+                    />
+                  </div>
+                </ListboxOptions>
+              </Listbox>
+            </div>
+          </aside>
+
+          <section className="min-w-0 flex-1">
+            <p className="mb-4 text-sm text-gray-400">
+              {loading ? "Loading..." : `${filteredCourses.length} course${filteredCourses.length !== 1 ? "s" : ""} found`}
+            </p>
+
+            <div className="flex flex-col gap-4">
+              {loading ? (
+                <p className="py-16 text-center text-gray-400">Loading courses...</p>
+              ) : filteredCourses.length === 0 ? (
+                <p className="py-16 text-center text-gray-400">No courses match your search.</p>
+              ) : (
+                filteredCourses.map((course) => (
+                  <CourseSummaryCard
+                    key={course.id}
+                    course={course}
+                    selectable
+                    selected={selectedForCompare.has(course.id)}
+                    onToggleSelect={toggleCompare}
+                  />
+                ))
+              )}
+            </div>
+          </section>
         </div>
-      </main>
+      </div>
 
       <aside
         className={`fixed bottom-5 left-1/2 z-20 flex w-[min(930px,calc(100%-26px))] -translate-x-1/2 items-center justify-between gap-3 rounded-3xl border border-gray-200 bg-white/95 px-3 py-3 shadow-lg backdrop-blur-sm transition-all duration-300 sm:px-4 ${

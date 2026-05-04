@@ -156,3 +156,5 @@ coverage/
 
 */*/__pycache__
 
+.agent.md
+.claude

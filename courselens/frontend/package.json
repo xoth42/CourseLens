@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "groq-sdk": "^1.1.2"
+    "groq-sdk": "^1.1.2",
+    "react-range": "^1.10.0"
   }
 }
