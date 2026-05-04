@@ -6,13 +6,60 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { gpaToLetter } from "@/lib/gpa";
 import { formatCredits } from "@/lib/courseFormat";
-import {
-  GRADE_DISTRIBUTION_LABELS,
-  illustrativeSharesFromAvgGpa,
-} from "@/lib/illustrative-grade-distribution";
 import type { Course } from "@/types/course";
 
 const MAX_COMPARE = 4;
+
+type ComparePlotType =
+  | "distribution"
+  | "over-time"
+  | "per-instructor"
+  | "hours"
+  | "difficulty-grade";
+
+const PLOT_OPTIONS: { value: ComparePlotType; label: string }[] = [
+  { value: "distribution", label: "Grade distribution" },
+  { value: "over-time", label: "Grade over time" },
+  { value: "per-instructor", label: "Grade per instructor" },
+  { value: "hours", label: "Hours per week" },
+  { value: "difficulty-grade", label: "Difficulty vs grade" },
+];
+
+const GRADE_DISTRIBUTION_LABELS = ["A", "A-", "B+", "B", "B-", "C+", "C", "D/F"] as const;
+
+const HOURS_LABELS = ["0–5", "6–10", "11–15", "16–20", "21+"] as const;
+
+type EvalRow = {
+  course_id: number;
+  grade: string | null;
+  semester: string | null;
+  professor_name: string | null;
+  rating: number;
+  difficulty: number;
+  hours_per_week: number | null;
+};
+
+type CompareCourse = Course & {
+  evaluationRows: EvalRow[];
+  distribution: number[];
+  gradeSampleSize: number;
+};
+
+type CourseCompareViewProps = {
+  initialSelectedIds: number[];
+};
+
+function uniqueOrderedIds(ids: number[]): number[] {
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const id of ids) {
+    if (!Number.isFinite(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= MAX_COMPARE) break;
+  }
+  return out;
+}
 
 function bestIndices(values: number[], mode: "max" | "min"): number[] {
   if (values.length === 0) return [];
@@ -23,28 +70,198 @@ function bestIndices(values: number[], mode: "max" | "min"): number[] {
     .map((item) => item.i);
 }
 
-type CompareCourse = Course & { distribution: number[] };
+function normalizeGrade(grade: string | null): string | null {
+  if (!grade) return null;
+  const cleaned = grade.trim().toUpperCase();
+  const allowed = ["A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "F"];
+  return allowed.includes(cleaned) ? cleaned : null;
+}
 
-function enrichCourse(c: Course): CompareCourse {
+function gradeToPoints(letter: string): number {
+  switch (letter) {
+    case "A":
+      return 4.0;
+    case "A-":
+      return 3.7;
+    case "B+":
+      return 3.3;
+    case "B":
+      return 3.0;
+    case "B-":
+      return 2.7;
+    case "C+":
+      return 2.3;
+    case "C":
+      return 2.0;
+    case "C-":
+      return 1.7;
+    case "D+":
+      return 1.3;
+    case "D":
+      return 1.0;
+    default:
+      return 0.0;
+  }
+}
+
+function semesterSortValue(semester: string): number {
+  const match = semester.match(/(Spring|Summer|Fall)\s+(\d{4})/i);
+  if (!match) return 0;
+  const term = match[1].toLowerCase();
+  const year = Number(match[2]);
+  let termValue = 0;
+  if (term === "spring") termValue = 1;
+  if (term === "summer") termValue = 2;
+  if (term === "fall") termValue = 3;
+  return year * 10 + termValue;
+}
+
+function gradeBucketIndex(grade: string): number {
+  if (grade === "A") return 0;
+  if (grade === "A-") return 1;
+  if (grade === "B+") return 2;
+  if (grade === "B") return 3;
+  if (grade === "B-") return 4;
+  if (grade === "C+") return 5;
+  if (grade === "C" || grade === "C-") return 6;
+  return 7;
+}
+
+function buildDistribution(grades: (string | null)[]): { distribution: number[]; sampleSize: number } {
+  const counts = new Array(GRADE_DISTRIBUTION_LABELS.length).fill(0);
+  for (const rawGrade of grades) {
+    const grade = normalizeGrade(rawGrade);
+    if (!grade) continue;
+    counts[gradeBucketIndex(grade)] += 1;
+  }
+  const sampleSize = counts.reduce((sum, count) => sum + count, 0);
+  if (sampleSize === 0) {
+    return { distribution: new Array(GRADE_DISTRIBUTION_LABELS.length).fill(0), sampleSize: 0 };
+  }
   return {
-    ...c,
-    distribution: illustrativeSharesFromAvgGpa(c.avg_gpa),
+    distribution: counts.map((count) => (count / sampleSize) * 100),
+    sampleSize,
   };
 }
 
-function Sparkline({ values }: { values: number[] }) {
-  const max = Math.max(...values, 1);
-  return (
-    <div className="mt-1.5 flex h-[34px] items-end gap-0.5" aria-hidden>
-      {values.map((v, i) => (
-        <span
-          key={i}
-          className="block w-2.5 rounded-t-sm bg-gradient-to-b from-sky-400 to-blue-600 opacity-90"
-          style={{ height: `${Math.max(7, Math.round((v / max) * 100))}%` }}
-        />
-      ))}
-    </div>
-  );
+function plotMetaFromRows(rows: EvalRow[], plot: ComparePlotType): { values: number[]; labels: string[]; footnote: string } {
+  if (plot === "distribution") {
+    const grades = rows.map((r) => r.grade);
+    const { distribution, sampleSize } = buildDistribution(grades);
+    return {
+      values: distribution,
+      labels: [...GRADE_DISTRIBUTION_LABELS],
+      footnote:
+        sampleSize > 0
+          ? "Percent of evaluations with a letter grade, bucketed as shown."
+          : "No letter grades in evaluations yet.",
+    };
+  }
+
+  if (plot === "over-time") {
+    const map: Record<string, number[]> = {};
+    for (const r of rows) {
+      if (!r.semester || !r.grade) continue;
+      const g = normalizeGrade(r.grade);
+      if (!g) continue;
+      if (!map[r.semester]) map[r.semester] = [];
+      map[r.semester].push(gradeToPoints(g));
+    }
+    const sorted = Object.entries(map)
+      .map(([semester, vals]) => ({
+        semester,
+        value: vals.reduce((a, b) => a + b, 0) / vals.length,
+      }))
+      .sort((a, b) => semesterSortValue(a.semester) - semesterSortValue(b.semester));
+    const values = sorted.map((x) => (x.value / 4) * 100);
+    return {
+      values,
+      labels: sorted.map((x) => x.semester),
+      footnote: "Average letter-grade points by term (normalized for bar height).",
+    };
+  }
+
+  if (plot === "per-instructor") {
+    const map: Record<string, number[]> = {};
+    for (const r of rows) {
+      if (!r.professor_name || !r.grade) continue;
+      const g = normalizeGrade(r.grade);
+      if (!g) continue;
+      if (!map[r.professor_name]) map[r.professor_name] = [];
+      map[r.professor_name].push(gradeToPoints(g));
+    }
+    const entries = Object.entries(map)
+      .map(([name, vals]) => ({
+        name,
+        n: vals.length,
+        value: vals.reduce((a, b) => a + b, 0) / vals.length,
+      }))
+      .sort((a, b) => b.n - a.n)
+      .slice(0, 8);
+    return {
+      values: entries.map((x) => (x.value / 4) * 100),
+      labels: entries.map((x) => x.name),
+      footnote: "Up to eight instructors with the most graded evaluations.",
+    };
+  }
+
+  if (plot === "hours") {
+    const buckets = [0, 0, 0, 0, 0];
+    for (const r of rows) {
+      const h = r.hours_per_week;
+      if (h == null) continue;
+      if (h <= 5) buckets[0]++;
+      else if (h <= 10) buckets[1]++;
+      else if (h <= 15) buckets[2]++;
+      else if (h <= 20) buckets[3]++;
+      else buckets[4]++;
+    }
+    const max = Math.max(...buckets, 1);
+    const values = buckets.map((c) => (c / max) * 100);
+    return {
+      values,
+      labels: [...HOURS_LABELS],
+      footnote: "Count of reviews reporting hours per week (bucketed).",
+    };
+  }
+
+  const map: Record<string, number[]> = {};
+  for (const r of rows) {
+    if (!r.grade) continue;
+    const g = normalizeGrade(r.grade);
+    if (!g) continue;
+    const key = String(Math.round(r.difficulty));
+    if (!map[key]) map[key] = [];
+    map[key].push(gradeToPoints(g));
+  }
+  const order = ["1", "2", "3", "4", "5"];
+  const values = order.map((k) => {
+    const vals = map[k];
+    if (!vals?.length) return 0;
+    return ((vals.reduce((a, b) => a + b, 0) / vals.length) / 4) * 100;
+  });
+  return {
+    values,
+    labels: order.map((k) => `Diff ${k}`),
+    footnote: "Average letter-grade points by rounded difficulty (1–5).",
+  };
+}
+
+function plotRowLabel(plot: ComparePlotType): string {
+  switch (plot) {
+    case "distribution":
+      return "Grade distribution";
+    case "over-time":
+      return "Grade over time";
+    case "per-instructor":
+      return "Grade per instructor";
+    case "hours":
+      return "Hours per week";
+    case "difficulty-grade":
+      return "Difficulty vs grade";
+    default:
+      return "Chart";
+  }
 }
 
 function MiniBarsChart({ values, onClick }: { values: number[]; onClick?: () => void }) {
@@ -75,83 +292,89 @@ function MiniBarsChart({ values, onClick }: { values: number[]; onClick?: () => 
   return inner;
 }
 
-export default function CourseCompareView() {
+export default function CourseCompareView({ initialSelectedIds }: CourseCompareViewProps) {
+  const selectedIds = useMemo(() => uniqueOrderedIds(initialSelectedIds), [initialSelectedIds]);
+
   const [courses, setCourses] = useState<CompareCourse[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [view, setView] = useState<"list" | "compare">("list");
-  const [modalCourse, setModalCourse] = useState<CompareCourse | null>(null);
+  const [selectedPlot, setSelectedPlot] = useState<ComparePlotType>("distribution");
+  const [modal, setModal] = useState<{
+    course: CompareCourse;
+    plot: ComparePlotType;
+    values: number[];
+    labels: string[];
+  } | null>(null);
 
   useEffect(() => {
     async function load() {
-      const { data, error } = await supabase.from("course_metrics").select("*");
-      if (!error && data) {
-        setCourses((data as Course[]).map(enrichCourse));
+      if (selectedIds.length === 0) {
+        setCourses([]);
+        setLoading(false);
+        return;
       }
+
+      const [{ data: metricsData, error: metricsError }, { data: evalData, error: evalError }] =
+        await Promise.all([
+          supabase.from("course_metrics").select("*").in("id", selectedIds),
+          supabase
+            .from("course_evaluations")
+            .select("course_id, grade, semester, professor_name, rating, difficulty, hours_per_week")
+            .in("course_id", selectedIds),
+        ]);
+
+      if (metricsError || evalError || !metricsData) {
+        setCourses([]);
+        setLoading(false);
+        return;
+      }
+
+      const rows = (evalData ?? []) as EvalRow[];
+      const rowsByCourse = new Map<number, EvalRow[]>();
+      for (const row of rows) {
+        const list = rowsByCourse.get(row.course_id) ?? [];
+        list.push(row);
+        rowsByCourse.set(row.course_id, list);
+      }
+
+      const byId = new Map((metricsData as Course[]).map((c) => [c.id, c]));
+      const ordered: CompareCourse[] = [];
+      for (const id of selectedIds) {
+        const base = byId.get(id);
+        if (!base) continue;
+        const evaluationRows = rowsByCourse.get(id) ?? [];
+        const grades = evaluationRows.map((r) => r.grade);
+        const { distribution, sampleSize } = buildDistribution(grades);
+        ordered.push({ ...base, evaluationRows, distribution, gradeSampleSize: sampleSize });
+      }
+      setCourses(ordered);
       setLoading(false);
     }
     load();
-  }, []);
+  }, [selectedIds]);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return courses;
-    return courses.filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        c.code.toLowerCase().includes(q) ||
-        c.professor.toLowerCase().includes(q)
-    );
-  }, [courses, search]);
-
-  const selectedCourses = useMemo(() => {
-    return courses.filter((c) => selected.has(c.id));
-  }, [courses, selected]);
-
-  const toggleSelect = useCallback((id: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-        return next;
-      }
-      if (next.size < MAX_COMPARE) {
-        next.add(id);
-        return next;
-      }
-      const oldest = next.values().next().value as number;
-      next.delete(oldest);
-      next.add(id);
-      return next;
-    });
-  }, []);
-
-  const removeSelected = useCallback((id: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-  }, []);
-
-  const count = selected.size;
-  const trayVisible = count > 0;
+  const openModal = useCallback((course: CompareCourse) => {
+    const { values, labels } = plotMetaFromRows(course.evaluationRows, selectedPlot);
+    setModal({ course, plot: selectedPlot, values, labels });
+  }, [selectedPlot]);
 
   useEffect(() => {
-    if (!modalCourse) return;
+    if (!modal) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setModalCourse(null);
+      if (e.key === "Escape") setModal(null);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [modalCourse]);
+  }, [modal]);
 
-  const compared = selectedCourses;
+  const plotFootnote = useMemo(() => {
+    if (courses.length === 0) return "";
+    return plotMetaFromRows(courses[0].evaluationRows, selectedPlot).footnote;
+  }, [courses, selectedPlot]);
 
   function ComparisonTable() {
-    if (compared.length === 0) return null;
+    if (courses.length === 0) return null;
 
+    const compared = courses;
     const gpaVals = compared.map((c) => c.avg_gpa);
     const ratingVals = compared.map((c) => c.rating);
     const diffVals = compared.map((c) => c.difficulty);
@@ -181,6 +404,21 @@ export default function CourseCompareView() {
 
     return (
       <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-2 border-b border-gray-100 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <span className="text-sm font-semibold text-slate-800">Comparison chart</span>
+          <select
+            value={selectedPlot}
+            onChange={(e) => setSelectedPlot(e.target.value as ComparePlotType)}
+            className="w-full max-w-xs rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
+            aria-label="Chart type"
+          >
+            {PLOT_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <table className="min-w-[700px] w-full border-collapse text-left">
           <thead>
             <tr>
@@ -231,19 +469,24 @@ export default function CourseCompareView() {
             </tr>
             <tr>
               <td className="sticky left-0 z-[1] border-b border-emerald-100/80 bg-slate-50/95 px-3.5 py-3 text-sm font-bold text-emerald-900">
-                Illustrative grade mix
+                {plotRowLabel(selectedPlot)}
               </td>
-              {compared.map((c) => (
-                <td
-                  key={c.id}
-                  className="border-b border-emerald-100/80 px-3.5 py-3 text-sm font-semibold text-slate-800"
-                >
-                  <MiniBarsChart
-                    values={c.distribution}
-                    onClick={() => setModalCourse(c)}
-                  />
-                </td>
-              ))}
+              {compared.map((c) => {
+                const { values } = plotMetaFromRows(c.evaluationRows, selectedPlot);
+                const empty = values.length === 0 || values.every((v) => v === 0);
+                return (
+                  <td
+                    key={c.id}
+                    className="border-b border-emerald-100/80 px-3.5 py-3 text-sm font-semibold text-slate-800"
+                  >
+                    {empty ? (
+                      <span className="text-xs text-slate-400">No data</span>
+                    ) : (
+                      <MiniBarsChart values={values} onClick={() => openModal(c)} />
+                    )}
+                  </td>
+                );
+              })}
             </tr>
             <tr>
               <td className="sticky left-0 z-[1] border-b border-emerald-100/80 bg-slate-50/95 px-3.5 py-3 text-sm font-bold text-emerald-900">
@@ -271,222 +514,108 @@ export default function CourseCompareView() {
             </tr>
           </tbody>
         </table>
-        <p className="border-t border-gray-100 px-4 py-2 text-xs text-slate-500">
-          Illustrative grade bars are inferred from mean GPA for layout only, not official
-          registrar data.
-        </p>
+        <p className="border-t border-gray-100 px-4 py-2 text-xs text-slate-500">{plotFootnote}</p>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[50vh] flex-1 items-center justify-center bg-gray-50">
+        <p className="text-gray-500">Loading comparison…</p>
+      </div>
+    );
+  }
+
+  if (selectedIds.length < 2) {
+    return (
+      <div className="min-h-full flex-1 bg-gray-50">
+        <main className="mx-auto max-w-2xl px-4 py-12">
+          <Link href="/courses" className="mb-6 inline-block text-sm text-blue-600 hover:underline">
+            ← Back to courses
+          </Link>
+          <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
+            <h1 className="text-xl font-bold text-gray-900">Compare courses</h1>
+            <p className="mt-3 text-sm text-gray-600">
+              Select at least two courses on the browse page, then use <strong>Compare selected</strong>.
+            </p>
+            <Link
+              href="/courses"
+              className="mt-6 inline-block rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              Go to browse courses
+            </Link>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (courses.length < 2) {
+    return (
+      <div className="min-h-full flex-1 bg-gray-50">
+        <main className="mx-auto max-w-2xl px-4 py-12">
+          <Link href="/courses" className="mb-6 inline-block text-sm text-blue-600 hover:underline">
+            ← Back to courses
+          </Link>
+          <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-8 shadow-sm">
+            <h1 className="text-xl font-bold text-gray-900">Could not load comparison</h1>
+            <p className="mt-3 text-sm text-gray-700">
+              Fewer than two of the selected courses were found. Return to the course list and try again.
+            </p>
+            <Link
+              href="/courses"
+              className="mt-6 inline-block rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              Back to browse courses
+            </Link>
+          </div>
+        </main>
       </div>
     );
   }
 
   return (
-    <div className="min-h-full flex-1 bg-gray-50 pb-36">
+    <div className="min-h-full flex-1 bg-gray-50 pb-10">
       <main className="mx-auto max-w-5xl px-4 py-8">
-        <Link
-          href="/courses"
-          className="mb-6 inline-block text-sm text-blue-600 hover:underline"
-        >
+        <Link href="/courses" className="mb-6 inline-block text-sm text-blue-600 hover:underline">
           ← Back to courses
         </Link>
 
-        {view === "list" && (
-          <section aria-label="Course list for comparison">
-            <header className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">Compare courses</h1>
-                <p className="mt-1 text-sm text-gray-600">
-                  Pick up to four courses, then compare ratings, difficulty, and GPA side by side.
-                </p>
-              </div>
-              <div className="shrink-0 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-bold text-emerald-900 shadow-sm">
-                {count} / {MAX_COMPARE} selected
-              </div>
-            </header>
-
-            <div className="mb-4">
-              <input
-                type="search"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Filter by name, code, or professor…"
-                className="w-full max-w-xl rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
-            {loading ? (
-              <p className="py-16 text-center text-gray-400">Loading courses…</p>
-            ) : filtered.length === 0 ? (
-              <p className="py-16 text-center text-gray-400">No courses match your filter.</p>
-            ) : (
-              <div className="flex flex-col gap-3">
-                {filtered.map((course) => {
-                  const isSel = selected.has(course.id);
-                  return (
-                    <article
-                      key={course.id}
-                      className={`relative grid gap-3 overflow-hidden rounded-2xl border bg-white p-4 pl-14 shadow-sm transition-all sm:grid-cols-[1.3fr_1fr_0.6fr_0.85fr_1fr] sm:items-center sm:gap-3.5 ${
-                        isSel
-                          ? "border-blue-300 bg-sky-50/40 ring-1 ring-blue-200"
-                          : "border-gray-200 hover:border-gray-300"
-                      }`}
-                    >
-                      <div
-                        className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-gradient-to-r from-blue-200/40 to-emerald-300/50 opacity-0 transition-opacity"
-                        style={{ opacity: isSel ? 1 : 0 }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => toggleSelect(course.id)}
-                        className={`absolute left-3 top-3 rounded-lg border px-2 py-1.5 text-xs font-bold transition-colors ${
-                          isSel
-                            ? "border-blue-600 bg-blue-600 text-white"
-                            : "border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100"
-                        }`}
-                      >
-                        {isSel ? "✓ Selected" : "+ Compare"}
-                      </button>
-                      <div className="min-w-0">
-                        <h2 className="text-base font-semibold leading-snug text-gray-900">
-                          <Link
-                            href={`/courses/${course.id}`}
-                            className="hover:text-blue-600 hover:underline"
-                          >
-                            {course.name}
-                          </Link>
-                        </h2>
-                        <p className="mt-1 text-sm text-gray-500">{course.professor}</p>
-                      </div>
-                      <div>
-                        <div className="text-[0.74rem] font-bold uppercase tracking-wide text-slate-500">
-                          Avg. GPA
-                        </div>
-                        <span className="mt-0.5 inline-flex rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-sm font-bold text-slate-800">
-                          {gpaToLetter(course.avg_gpa)}
-                          {course.avg_gpa > 0 ? ` (${course.avg_gpa.toFixed(2)})` : ""}
-                        </span>
-                      </div>
-                      <div>
-                        <div className="text-[0.74rem] font-bold uppercase tracking-wide text-slate-500">
-                          Credits
-                        </div>
-                        <span className="mt-0.5 inline-flex rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-sm font-bold text-slate-800">
-                          {formatCredits(course.credits, course.max_credits)}
-                        </span>
-                      </div>
-                      <div>
-                        <div className="text-[0.74rem] font-bold uppercase tracking-wide text-slate-500">
-                          Difficulty
-                        </div>
-                        <span className="mt-0.5 inline-flex rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-sm font-bold text-slate-800">
-                          {course.difficulty.toFixed(1)} / 5
-                        </span>
-                      </div>
-                      <div>
-                        <div className="text-[0.74rem] font-bold uppercase tracking-wide text-slate-500">
-                          Illustrative mix
-                        </div>
-                        <Sparkline values={course.distribution} />
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
-          </section>
-        )}
-
-        {view === "compare" && (
-          <section aria-label="Comparison table">
-            <div className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-              <div>
-                <h2 className="text-xl font-bold text-gray-900 sm:text-2xl">
-                  Side-by-side comparison
-                </h2>
-                <p className="mt-1 text-sm text-gray-600">
-                  {compared.length} course{compared.length === 1 ? "" : "s"}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setView("list")}
-                className="shrink-0 rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm hover:bg-gray-50"
-              >
-                Back to list
-              </button>
-            </div>
-            <ComparisonTable />
-          </section>
-        )}
+        <section aria-label="Course comparison">
+          <header className="mb-4">
+            <h1 className="text-2xl font-bold text-gray-900">Compare courses</h1>
+            <p className="mt-1 text-sm text-gray-600">
+              {courses.length} course{courses.length === 1 ? "" : "s"} — metrics and evaluation-based charts.
+            </p>
+          </header>
+          <ComparisonTable />
+        </section>
       </main>
 
-      <aside
-        className={`fixed bottom-5 left-1/2 z-20 flex w-[min(930px,calc(100%-26px))] -translate-x-1/2 items-center justify-between gap-3 rounded-3xl border border-gray-200 bg-white/95 px-3 py-3 shadow-lg backdrop-blur-sm transition-all duration-300 sm:px-4 ${
-          trayVisible
-            ? "translate-y-0 opacity-100"
-            : "pointer-events-none translate-y-[130%] opacity-0"
-        }`}
-        aria-live="polite"
-      >
-        <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center">
-          <div className="shrink-0 text-sm font-extrabold text-emerald-950">
-            {count} of {MAX_COMPARE} selected
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {selectedCourses.map((c) => (
-              <span
-                key={c.id}
-                className="inline-flex items-center gap-1.5 rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-bold text-blue-900"
-              >
-                {c.code}
-                <button
-                  type="button"
-                  onClick={() => removeSelected(c.id)}
-                  className="font-black leading-none text-blue-900 hover:text-blue-700"
-                  aria-label={`Remove ${c.code}`}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        </div>
-        <button
-          type="button"
-          disabled={count < 2}
-          onClick={() => {
-            if (count < 2) return;
-            setView("compare");
-            window.scrollTo({ top: 0, behavior: "smooth" });
-          }}
-          className="shrink-0 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Compare
-        </button>
-      </aside>
-
-      {modalCourse && (
+      {modal && (
         <div
           className="fixed inset-0 z-30 flex items-center justify-center bg-black/55 p-5"
           role="dialog"
           aria-modal="true"
-          aria-label="Illustrative grade distribution"
+          aria-label="Chart detail"
           onClick={(e) => {
-            if (e.target === e.currentTarget) setModalCourse(null);
+            if (e.target === e.currentTarget) setModal(null);
           }}
         >
-          <div className="w-full max-w-[700px] rounded-3xl border border-gray-200 bg-white p-5 shadow-2xl">
+          <div className="max-h-[90vh] w-full max-w-[700px] overflow-y-auto rounded-3xl border border-gray-200 bg-white p-5 shadow-2xl">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-lg font-bold text-gray-900">
-                  {modalCourse.code} — illustrative mix
+                  {modal.course.code} — {plotRowLabel(modal.plot).toLowerCase()}
                 </h3>
                 <p className="text-sm text-gray-500">
-                  {modalCourse.name} · {modalCourse.professor}
+                  {modal.course.name} · {modal.course.professor}
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setModalCourse(null)}
+                onClick={() => setModal(null)}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-xl leading-none text-gray-700 hover:bg-gray-200"
                 aria-label="Close"
               >
@@ -495,8 +624,8 @@ export default function CourseCompareView() {
             </div>
             <div className="rounded-2xl border border-emerald-100 bg-emerald-50/30 p-4">
               <div className="flex h-[220px] items-end gap-1.5 border-b-2 border-l-2 border-emerald-400/80 pb-2 pl-2 pt-1">
-                {modalCourse.distribution.map((value, i) => {
-                  const max = Math.max(...modalCourse.distribution, 1);
+                {modal.values.map((value, i) => {
+                  const max = Math.max(...modal.values, 1);
                   const h = Math.max(8, Math.round((value / max) * 170));
                   return (
                     <div
@@ -507,16 +636,18 @@ export default function CourseCompareView() {
                         className="w-full max-w-[56px] rounded-t-lg bg-gradient-to-b from-sky-400 to-blue-600"
                         style={{ height: `${h}px` }}
                       />
-                      <div className="text-center text-[0.72rem] font-bold text-slate-600">
-                        {GRADE_DISTRIBUTION_LABELS[i]}
+                      <div className="line-clamp-2 text-center text-[0.65rem] font-bold leading-tight text-slate-600">
+                        {modal.labels[i] ?? "—"}
                       </div>
                     </div>
                   );
                 })}
               </div>
               <p className="mt-3 text-sm text-slate-600">
-                Shares sum to 100% (illustrative). Not official grade counts. Based on course
-                average GPA ({modalCourse.avg_gpa > 0 ? modalCourse.avg_gpa.toFixed(2) : "N/A"}).
+                {plotMetaFromRows(modal.course.evaluationRows, modal.plot).footnote}
+                {modal.plot === "distribution" && modal.course.gradeSampleSize > 0 ? (
+                  <> Evaluations with a letter grade: {modal.course.gradeSampleSize}.</>
+                ) : null}
               </p>
             </div>
           </div>

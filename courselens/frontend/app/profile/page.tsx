@@ -9,21 +9,33 @@ export default function Profile() {
     
     const { id } = useParams();
     const [email, setEmail] = useState<string | null>(null);
+    const [userId, setUserId] = useState<string | null>(null);
     const [studentid, setStudentId] = useState(0);
     const [reviews, setReviews] = useState([]);
     const [loading, setLoading] = useState(true);
     const [reviewVis, setVis] = useState(false);
+    const [courseRequests, setCourseRequests] = useState<{
+      id: number;
+      subject: string;
+      course_number: string;
+      class_name: string;
+      status: string;
+      denial_reason: string | null;
+      created_at: string;
+    }[]>([]);
 
     useEffect(() => {
         const fetchUser = async () => {
         const { data } = await supabase.auth.getUser();
         setEmail(data.user?.email ?? null);
+        setUserId(data.user?.id ?? null);
         };
 
         fetchUser();
     }, []);
 
     useEffect(() => {
+    if (!email) return;
     async function fetchStudentId() {
       const { data, error } = await supabase
         .from("student_profiles")
@@ -50,6 +62,19 @@ export default function Profile() {
     }
     fetchReviews();
   }, [studentid]);
+
+    useEffect(() => {
+      if (!userId) return;
+      async function fetchRequests() {
+        const { data } = await supabase
+          .from("class_add_requests")
+          .select("id, subject, course_number, class_name, status, denial_reason, created_at")
+          .eq("requested_by_user_id", userId)
+          .order("created_at", { ascending: false });
+        if (data) setCourseRequests(data);
+      }
+      fetchRequests();
+    }, [userId]);
 
     const firstThree = reviews.slice(0,3);
     const restRevs = reviews.slice(3);
@@ -195,10 +220,48 @@ export default function Profile() {
                         </div>
                         </section>
                     )}
+                {/* Course Requests */}
+                {courseRequests.length > 0 && (
+                  <div className="mt-6 text-left">
+                    <p className="text-sm text-black mb-2">My Course Requests:</p>
+                    <div className="flex flex-col gap-2">
+                      {courseRequests.map((req) => (
+                        <div
+                          key={req.id}
+                          className={`rounded-xl border p-4 ${
+                            req.status === "accepted" ? "bg-green-50 border-green-200" :
+                            req.status === "rejected"   ? "bg-red-50 border-red-200"     :
+                            "bg-gray-50 border-gray-200"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-semibold text-gray-900">
+                              {req.subject.toUpperCase()}{req.course_number} — {req.class_name}
+                            </span>
+                            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full shrink-0 ${
+                              req.status === "accepted" ? "bg-green-100 text-green-700" :
+                              req.status === "rejected"   ? "bg-red-100 text-red-600"     :
+                              "bg-yellow-100 text-yellow-700"
+                            }`}>
+                              {req.status}
+                            </span>
+                          </div>
+                          {req.status === "rejected" && req.denial_reason && (
+                            <p className="text-xs text-red-600 mt-1">Reason: {req.denial_reason}</p>
+                          )}
+                          <p className="text-xs text-gray-400 mt-1">
+                            {new Date(req.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
             </div>
         </div>
     </div>
-    
+
     </>
     )
 }
