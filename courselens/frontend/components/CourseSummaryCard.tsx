@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import BookmarkButton from "./BookmarkButton";
+import { formatCredits } from "@/lib/courseFormat";
 
 export type CourseListItem = {
   id: number;
@@ -12,6 +13,8 @@ export type CourseListItem = {
   difficulty: number;
   reviews: number;
   department: string;
+  credits?: number | null;
+  max_credits?: number | null;
 };
 
 type CourseSummaryCardProps = {
@@ -41,6 +44,7 @@ export default function CourseSummaryCard({ course }: CourseSummaryCardProps) {
           </span>
           <span>{course.reviews} reviews</span>
           <span>{course.department}</span>
+          <span>Credits: <strong>{formatCredits(course.credits, course.max_credits)}</strong></span>
         </div>
       </Link>
       <BookmarkButton courseId={course.id} className="absolute right-3 top-3" />

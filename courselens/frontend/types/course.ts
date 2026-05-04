@@ -9,11 +9,12 @@ export type Course = {
     reviews: number;
     department: string;
     description: string;
+    credits?: number | null;
+    max_credits?: number | null;
   };
   
 export type Review = {
   id: number;
-  course_id: number;
   student_profile_id: number;
   rating: number;
   difficulty: number;

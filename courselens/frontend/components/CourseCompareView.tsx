@@ -5,6 +5,7 @@ import type { Key, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { gpaToLetter } from "@/lib/gpa";
+import { formatCredits } from "@/lib/courseFormat";
 import {
   GRADE_DISTRIBUTION_LABELS,
   illustrativeSharesFromAvgGpa,
@@ -217,6 +218,19 @@ export default function CourseCompareView() {
             </tr>
             <tr>
               <td className="sticky left-0 z-[1] border-b border-emerald-100/80 bg-slate-50/95 px-3.5 py-3 text-sm font-bold text-emerald-900">
+                Credits
+              </td>
+              {compared.map((c) => (
+                <td
+                  key={c.id}
+                  className="border-b border-emerald-100/80 px-3.5 py-3 text-sm font-semibold text-slate-800"
+                >
+                  {formatCredits(c.credits, c.max_credits)}
+                </td>
+              ))}
+            </tr>
+            <tr>
+              <td className="sticky left-0 z-[1] border-b border-emerald-100/80 bg-slate-50/95 px-3.5 py-3 text-sm font-bold text-emerald-900">
                 Illustrative grade mix
               </td>
               {compared.map((c) => (
@@ -310,7 +324,7 @@ export default function CourseCompareView() {
                   return (
                     <article
                       key={course.id}
-                      className={`relative grid gap-3 overflow-hidden rounded-2xl border bg-white p-4 pl-14 shadow-sm transition-all sm:grid-cols-[1.3fr_1fr_0.85fr_1fr] sm:items-center sm:gap-3.5 ${
+                      className={`relative grid gap-3 overflow-hidden rounded-2xl border bg-white p-4 pl-14 shadow-sm transition-all sm:grid-cols-[1.3fr_1fr_0.6fr_0.85fr_1fr] sm:items-center sm:gap-3.5 ${
                         isSel
                           ? "border-blue-300 bg-sky-50/40 ring-1 ring-blue-200"
                           : "border-gray-200 hover:border-gray-300"
@@ -346,10 +360,18 @@ export default function CourseCompareView() {
                         <div className="text-[0.74rem] font-bold uppercase tracking-wide text-slate-500">
                           Avg. GPA
                         </div>
-                        <div className="text-sm font-bold text-slate-800">
+                        <span className="mt-0.5 inline-flex rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-sm font-bold text-slate-800">
                           {gpaToLetter(course.avg_gpa)}
                           {course.avg_gpa > 0 ? ` (${course.avg_gpa.toFixed(2)})` : ""}
+                        </span>
+                      </div>
+                      <div>
+                        <div className="text-[0.74rem] font-bold uppercase tracking-wide text-slate-500">
+                          Credits
                         </div>
+                        <span className="mt-0.5 inline-flex rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-sm font-bold text-slate-800">
+                          {formatCredits(course.credits, course.max_credits)}
+                        </span>
                       </div>
                       <div>
                         <div className="text-[0.74rem] font-bold uppercase tracking-wide text-slate-500">

@@ -17,14 +17,14 @@ Usage:
     python scraper.py --years 4                     # all terms from the last 4 years
     python scraper.py --all-terms                   # every term in the SPIRE dropdown
     python scraper.py --force                       # ignore session, re-scrape everything
+    python scraper.py --probe-units                 # DOM probe: find the units element ID
+    python scraper.py --probe-units --subject MATH  # probe a different subject
 
 Resume / Ctrl-C:
     Progress is saved after every subject. If interrupted, re-run the same command to resume.
     Ctrl-C finishes the current subject, saves, then exits. Ctrl-C twice force-quits.
     To manually mark terms as done: edit out/session.json directly (see USAGE.txt).
 
-A browser window will open — SPIRE requires a real session and cannot be scraped headlessly
-without risk of detection. This is expected behavior.
 """
 
 import argparse
@@ -44,9 +44,39 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.wait import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
+import logging
 
 SPIRE_URL = "https://www.spire.umass.edu"
 OUT_DIR = os.path.join(os.path.dirname(__file__), "out")
+HEADLESS = True
+
+# TIMEOUT = 120  # seconds — SPIRE is slow
+# TIMEOUT = 60  
+TIMEOUT = 15  
+
+logger = logging.getLogger(__name__)
+
+
+def setup_logging(debug: bool = False):
+    """Configure logging for the scraper utilities.
+
+    Call with `debug=True` to enable verbose debug output suitable for
+    troubleshooting stalls and DOM issues.
+    """
+    level = logging.DEBUG if debug else logging.INFO
+    # Prefer not to reconfigure if the root logger already has handlers
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    else:
+        root.setLevel(level)
+
+    # Reduce noise from libraries we don't need verbose output from
+    logging.getLogger("selenium").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("webdriver_manager").setLevel(logging.WARNING)
+
+    logger.debug("Logging initialized at %s", logging.getLevelName(level))
 
 # ---------------------------------------------------------------------------
 # Driver setup
@@ -54,9 +84,13 @@ OUT_DIR = os.path.join(os.path.dirname(__file__), "out")
 
 def make_driver() -> webdriver.Chrome:
     opts = webdriver.ChromeOptions()
+    
+    if HEADLESS:
+        opts.add_argument("--headless")
+        
     opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--window-size=1920,1080")
+    opts.add_argument("--disable-dev-shm-usage")
     service = Service(ChromeDriverManager().install())
     return webdriver.Chrome(service=service, options=opts)
 
@@ -65,45 +99,103 @@ def make_driver() -> webdriver.Chrome:
 # SPIRE wait / navigation helpers (adapted from spire-api reference)
 # ---------------------------------------------------------------------------
 
-TIMEOUT = 120  # seconds — SPIRE is slow
 
 def wait_for_spire(driver: webdriver.Chrome):
     """Wait until SPIRE's loading overlay is gone."""
+    # Log what the body style looks like before we start waiting
+    try:
+        body = driver.find_element(By.CSS_SELECTOR, "body.PSPAGE")
+        style = body.get_attribute("style") or ""
+        print(f"        wait_for_spire: body.PSPAGE style={style!r}", flush=True)
+    except NoSuchElementException:
+        print(f"        wait_for_spire: body.PSPAGE not found — returning immediately", flush=True)
+        return
     WebDriverWait(driver, TIMEOUT).until_not(
         EC.text_to_be_present_in_element_attribute(
             (By.CSS_SELECTOR, "body.PSPAGE"), "style", "none"
         )
     )
+    print(f"        wait_for_spire: done", flush=True)
 
 
 def switch_to_iframe(driver: webdriver.Chrome):
+    logger.debug("switch_to_iframe: waiting for iframe 'TargetContent'")
     WebDriverWait(driver, TIMEOUT).until(
         EC.frame_to_be_available_and_switch_to_it((By.NAME, "TargetContent"))
     )
+    logger.debug("switch_to_iframe: switched to iframe 'TargetContent'")
+
+
+def ensure_iframe(driver: webdriver.Chrome):
+    """Switch (back) into the TargetContent iframe.
+
+    Always resets to default content first. This is the critical fix:
+    without default_content(), calling switch_to_iframe while already inside
+    the iframe causes Selenium to search for a *nested* frame named
+    'TargetContent' (which doesn't exist). That triggers a 120-second
+    WebDriverWait timeout on every single select_by_value / click_and_wait
+    call — making the scraper appear permanently stalled.
+    """
+    try:
+        logger.debug("ensure_iframe: resetting to default content then switching to iframe")
+        print("        ensure_iframe: reset to default_content, then switching into iframe...", flush=True)
+        driver.switch_to.default_content()
+        switch_to_iframe(driver)
+        print("        ensure_iframe: done", flush=True)
+    except TimeoutException:
+        print("        ensure_iframe: TIMEOUT — iframe not found after reset", flush=True)
+        logger.debug("ensure_iframe: iframe switch timed out; continuing")
 
 
 def click_and_wait(driver: webdriver.Chrome, element_id: str):
+    # Ensure we're inside the SPIRE content iframe before locating the element
+    logger.debug("click_and_wait: element_id=%s - ensuring iframe", element_id)
+    ensure_iframe(driver)
+
+    logger.debug("click_and_wait: locating element %s", element_id)
     el = WebDriverWait(driver, TIMEOUT).until(
         EC.element_to_be_clickable((By.ID, element_id))
     )
+    logger.debug("click_and_wait: clicking element %s", element_id)
     driver.execute_script("arguments[0].click();", el)
+    logger.debug("click_and_wait: clicked %s — waiting for SPIRE load", element_id)
     wait_for_spire(driver)
+
+    # After navigation, re-enter the iframe so subsequent calls operate in the
+    # expected frame context (avoids stale/no-frame stalls).
+    logger.debug("click_and_wait: re-entering iframe after click %s", element_id)
+    ensure_iframe(driver)
+    logger.debug("click_and_wait: complete for %s", element_id)
 
 
 def select_by_value(driver: webdriver.Chrome, element_id: str, value: str):
+    logger.debug("select_by_value: element_id=%s value=%s", element_id, value)
+    ensure_iframe(driver)
+
     el = WebDriverWait(driver, TIMEOUT).until(
         EC.element_to_be_clickable((By.ID, element_id))
     )
+    logger.debug("select_by_value: selecting value %s on %s", value, element_id)
     Select(el).select_by_value(value)
     wait_for_spire(driver)
 
+    logger.debug("select_by_value: re-entering iframe after select %s", element_id)
+    ensure_iframe(driver)
+
 
 def select_by_text(driver: webdriver.Chrome, element_id: str, text: str):
+    logger.debug("select_by_text: element_id=%s text=%s", element_id, text)
+    ensure_iframe(driver)
+
     el = WebDriverWait(driver, TIMEOUT).until(
         EC.element_to_be_clickable((By.ID, element_id))
     )
+    logger.debug("select_by_text: selecting text %s on %s", text, element_id)
     Select(el).select_by_visible_text(text)
     wait_for_spire(driver)
+
+    logger.debug("select_by_text: re-entering iframe after select %s", element_id)
+    ensure_iframe(driver)
 
 
 # ---------------------------------------------------------------------------
@@ -253,22 +345,27 @@ def parse_results(driver: webdriver.Chrome, term: str, subject_id: str) -> tuple
 # ---------------------------------------------------------------------------
 
 def initialize_search(driver: webdriver.Chrome, term_value: str, subject_value: str):
+    print(f"      init[1/4] selecting term {term_value!r}...", flush=True)
     select_by_value(driver, "UM_DERIVED_SA_UM_TERM_DESCR", term_value)
+
+    print(f"      init[2/4] selecting subject {subject_value!r}...", flush=True)
     select_by_value(driver, "CLASS_SRCH_WRK2_SUBJECT$108$", subject_value)
 
     # Set catalog number filter to >= "A" (catches everything)
+    print(f"      init[3/4] setting catalog number filter...", flush=True)
     select_by_text(driver, "CLASS_SRCH_WRK2_SSR_EXACT_MATCH1", "greater than or equal to")
-
     nbr_input = driver.find_element(By.ID, "CLASS_SRCH_WRK2_CATALOG_NBR$8$")
     nbr_input.clear()
     nbr_input.send_keys("0")
     wait_for_spire(driver)
 
     # Uncheck "open classes only" so we get all sections
+    print(f"      init[4/4] unchecking open-only...", flush=True)
     open_only = driver.find_element(By.ID, "CLASS_SRCH_WRK2_SSR_OPEN_ONLY")
     if open_only.is_selected():
         driver.execute_script("arguments[0].click();", open_only)
         wait_for_spire(driver)
+    print(f"      init done.", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +642,92 @@ def scrape(term_filter: str | None, subject_filter: str | None, all_terms: bool,
 
 
 # ---------------------------------------------------------------------------
+# Probe — identify the DOM element ID(s) that carry units/credit data
+# ---------------------------------------------------------------------------
+
+def probe_units(driver: webdriver.Chrome):
+    """
+    Called after a successful class search. Dumps DOM info to stdout so we can
+    identify which element ID contains credit/units data.
+
+    Sections:
+      1. All elements whose ID contains UNIT, CREDIT, or HRS
+      2. Visible elements whose text matches a credit pattern (e.g. "3.00", "1.00 - 4.00")
+      3. The most common element-ID patterns on the page (to spot new prefixes)
+    """
+    SEP = "─" * 70
+
+    def sec(title):
+        print(f"\n{'=' * 70}\n  {title}\n{'=' * 70}")
+
+    # 1. Keyword scan on element IDs
+    sec("1. Elements with IDs containing UNIT / CREDIT / HRS")
+    keywords = ["UNIT", "CREDIT", "HRS", "HOUR"]
+    seen_ids: set[str] = set()
+    hits = []
+    for kw in keywords:
+        for el in driver.find_elements(By.CSS_SELECTOR, f"[id*='{kw}']"):
+            eid = el.get_property("id") or ""
+            if eid and eid not in seen_ids and any(k in eid.upper() for k in keywords):
+                seen_ids.add(eid)
+                hits.append(el)
+
+    if not hits:
+        print("  NONE FOUND.")
+    else:
+        print(f"  Found {len(hits)} element(s):\n")
+        for el in hits:
+            eid = el.get_property("id")
+            text = el.text.strip().replace("\n", " ")[:80]
+            print(f"  id={eid!r:60s}  tag={el.tag_name:6s}  displayed={el.is_displayed()}  text={text!r}")
+
+    # 2. Visible elements whose text looks like a credit value
+    sec("2. Visible elements whose text matches a credit pattern (e.g. '3.00', '1.00 - 4.00')")
+    credit_re = re.compile(r'^\d+\.00(\s*-\s*\d+\.00)?$')
+    seen_patterns: set[tuple] = set()
+    credit_hits = []
+    for el in driver.find_elements(By.CSS_SELECTOR, "span, td, div"):
+        try:
+            if not el.is_displayed():
+                continue
+            txt = el.text.strip()
+            if not credit_re.match(txt):
+                continue
+            eid = el.get_property("id") or ""
+            # Normalize $N suffix to see the pattern
+            id_pat = re.sub(r'\$\d+$', '$N', eid)
+            key = (id_pat, txt)
+            if key not in seen_patterns:
+                seen_patterns.add(key)
+                credit_hits.append((eid, id_pat, el.tag_name, txt))
+        except Exception:
+            continue
+
+    if not credit_hits:
+        print("  No visible elements with credit-pattern text found.")
+    else:
+        print(f"  Found {len(credit_hits)} unique (id-pattern, text) pair(s):\n")
+        for eid, id_pat, tag, txt in credit_hits[:30]:
+            print(f"  example_id={eid!r:55s}  pattern={id_pat!r:45s}  tag={tag:6s}  text={txt!r}")
+
+    # 3. Top element-ID patterns on the page
+    sec("3. Top 50 element-ID patterns on the page (count of $N variants)")
+    all_ids: list[str] = driver.execute_script(
+        "return Array.from(document.querySelectorAll('[id]')).map(e => e.id).filter(Boolean);"
+    )
+    pattern_counts: dict[str, int] = {}
+    for eid in all_ids:
+        pat = re.sub(r'\$\d+$', '$N', eid)
+        pattern_counts[pat] = pattern_counts.get(pat, 0) + 1
+    sorted_pats = sorted(pattern_counts.items(), key=lambda x: (-x[1], x[0]))
+    print(f"  Total IDs: {len(all_ids)}  |  Unique patterns: {len(pattern_counts)}\n")
+    for pat, count in sorted_pats[:50]:
+        print(f"  {count:4d}x  {pat!r}")
+
+    print(f"\n{SEP}\nProbe complete. Review sections 1 and 2 above to identify the units element.\n{SEP}\n")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -555,12 +738,54 @@ if __name__ == "__main__":
     parser.add_argument("--all-terms", action="store_true", help="Scrape every term in the SPIRE dropdown")
     parser.add_argument("--years", type=int, help="Scrape all terms within the last N years, e.g. --years 4")
     parser.add_argument("--force", action="store_true", help="Ignore session and re-scrape already-completed terms")
+    parser.add_argument("--probe-units", action="store_true",
+                        help="DOM probe: search one subject and dump units-related element IDs to stdout")
     args = parser.parse_args()
 
-    scrape(
-        term_filter=args.term,
-        subject_filter=args.subject,
-        all_terms=args.all_terms,
-        years=args.years,
-        force=args.force,
-    )
+    if args.probe_units:
+        subject = (args.subject or "COMPSCI").upper()
+        driver = make_driver()
+        try:
+            boot(driver)
+            term_options, subject_options = get_options(driver)
+
+            if args.term:
+                matched = [(v, t) for v, t in term_options if t == args.term]
+                if not matched:
+                    print(f"ERROR: term {args.term!r} not found.")
+                    sys.exit(1)
+                term_value, term_label = matched[0]
+            else:
+                term_value, term_label = term_options[0]
+
+            if subject not in [s[0] for s in subject_options]:
+                print(f"ERROR: subject {subject!r} not in dropdown.")
+                sys.exit(1)
+
+            print(f"Probing: subject={subject!r}  term={term_label!r}")
+            initialize_search(driver, term_value, subject)
+            click_and_wait(driver, "CLASS_SRCH_WRK2_SSR_PB_CLASS_SRCH")
+
+            try:
+                err = driver.find_element(By.ID, "DERIVED_CLSMSG_ERROR_TEXT")
+                print(f"ERROR: no results — {err.text.strip()!r}")
+                sys.exit(1)
+            except NoSuchElementException:
+                pass
+
+            print("Results loaded. Running probe...\n")
+            probe_units(driver)
+        finally:
+            input("[Press Enter to close the browser] ")
+            try:
+                driver.quit()
+            except Exception:
+                pass
+    else:
+        scrape(
+            term_filter=args.term,
+            subject_filter=args.subject,
+            all_terms=args.all_terms,
+            years=args.years,
+            force=args.force,
+        )

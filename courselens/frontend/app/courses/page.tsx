@@ -1,10 +1,13 @@
 "use client";
 
-import CourseSummaryCard, { type CourseListItem } from "@/components/CourseSummaryCard";
-import RequestCourseModal from "@/components/RequestCourseModal";
-import { supabase } from "@/lib/supabase/client";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
+import { Listbox, ListboxButton, ListboxOption, ListboxOptions } from "@headlessui/react";
+import { supabase } from "@/lib/supabase/client";
+import CourseSummaryCard, { type CourseListItem } from "@/components/CourseSummaryCard";
+import { Slider } from "@/components/Slider";
+import RequestCourseModal from "@/components/RequestCourseModal";
+import { formatCredits } from "@/lib/courseFormat";
 
 type Course = CourseListItem & {
   id: number;
@@ -13,10 +16,11 @@ type Course = CourseListItem & {
   professor: string;
   rating: number;
   difficulty: number;
-  avg_gpa: number;
   reviews: number;
   department: string;
   college: string | null;
+  credits?: number | null;
+  max_credits?: number | null;
 };
 
 // Maps raw SPIRE college names to short user-facing labels for the dropdown.
@@ -50,8 +54,6 @@ const SUBJECT_SHORTHANDS: [abbr: string, full: string][] = [
   ["stat",  "statistc"],  // stat  → STATISTC
   ["mie",   "m&i-eng"],   // MIE  → Mechanical & Industrial Engineering
 ];
-
-let lastSort: "" | "a-z" | "code-asc" | "code-desc" | "z-a" | "rating-asc" | "rating-desc" | "diff-asc" | "diff-desc" | "gpa-asc" | "gpa-desc" = "a-z";
 
 // Returns [original, expanded?].
 // e.g. "cs230" → ["cs230", "compsci 230"]
@@ -92,11 +94,11 @@ export default function CoursesPage() {
   const [search, setSearch] = useState("");
   const [college, setCollege] = useState("");
   const [department, setDepartment] = useState("");
-  const [courseLevels, setCourseLevels] = useState<Set<number>>(new Set());
-  const [courseLevelsOpen, setCourseLevelsOpen] = useState(false);
-  const [sortBy, setSortBy] = useState<"" | "code-asc" | "code-desc" | "a-z" | "z-a" | "rating-asc" | "rating-desc" | "diff-asc" | "diff-desc" | "gpa-asc" | "gpa-desc">(lastSort);
+  const [sortField, setSortField] = useState<"" | "code" | "credits">("");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [creditsRange, setCreditsRange] = useState<[number, number]>([1, 6]);
+  const [courseLevelRange, setCourseLevelRange] = useState<[number, number]>([100, 600]);
   const [requestModalOpen, setRequestModalOpen] = useState(false);
-  const [sortVis, setVis] = useState(false);
 
 
   useEffect(() => {
@@ -127,14 +129,6 @@ export default function CoursesPage() {
     return 600;
   }
 
-  // Get available course levels from current courses
-  const availableCourseLevels = Array.from(
-    new Set(
-      courses
-        .map((c) => getCourseLevel(c.code))
-        .filter((level): level is number => level !== null)
-    )
-  ).sort((a, b) => a - b);
   const collegeOptions = Array.from(
     new Set(
       courses
@@ -151,16 +145,27 @@ export default function CoursesPage() {
     )
   ).sort();
 
+  // Check if a course matches the credit filter range
+  function matchesCreditsFilter(course: Course, [minCredits, maxCredits]: [number, number]): boolean {
+    if (typeof course.credits !== "number") return true;
+
+    // If course has a max_credits (range), check if it overlaps with filter range
+    if (typeof course.max_credits === "number") {
+      return !(course.max_credits < minCredits || course.credits > maxCredits);
+    }
+    // Fixed credit: check if it's within filter range
+    return course.credits >= minCredits && course.credits <= maxCredits;
+  }
+
+  // Check if a course level falls within the selected range
+  function matchesCourseLevelFilter(courseLevel: number | null, [minLevel, maxLevel]: [number, number]): boolean {
+    if (courseLevel === null) return false;
+    return courseLevel >= minLevel && courseLevel <= maxLevel;
+  }
+
   function handleCollegeChange(next: string) {
     setCollege(next);
     setDepartment("");
-  }
-
-  function hideUnrated(a: Course, b: Course, prop: string) {
-    if (a[prop] === 0 && b[prop] !== 0) return 1
-    if (b[prop] === 0 && a[prop] !== 0) return -1
-    if (a[prop] === 0 && b[prop] === 0) return 0
-    return -2;
   }
 
   const searchTerms = search.trim() ? expandSearch(search) : [];
@@ -183,84 +188,30 @@ export default function CoursesPage() {
         department === "" || course.department === department;
 
       const courseLevel = getCourseLevel(course.code);
-      const matchesLevel =
-        courseLevels.size === 0 || (courseLevel !== null && courseLevels.has(courseLevel));
+      const matchesLevel = matchesCourseLevelFilter(courseLevel, courseLevelRange);
 
-      return matchesSearch && matchesCollege && matchesDepartment && matchesLevel;
+      const matchesCredits = matchesCreditsFilter(course, creditsRange);
+
+      return matchesSearch && matchesCollege && matchesDepartment && matchesLevel && matchesCredits;
     })
     .sort((a, b) => {
-      if (sortBy === "code-asc") return getCourseNumber(a.code) - getCourseNumber(b.code);
-      if (sortBy === "code-desc") return getCourseNumber(b.code) - getCourseNumber(a.code);
-      if (sortBy === "a-z") return a.code.localeCompare(b.code);
-      if (sortBy === "z-a") return b.code.localeCompare(a.code);
-      const noratings = hideUnrated(a, b, 'rating');
-      const nodiff = hideUnrated(a, b, 'difficulty');
-      const nogpa = hideUnrated(a, b, 'avg_gpa');
-      if (sortBy === "rating-asc") {
-        return (noratings === -2? a.rating - b.rating: noratings);
+      if (sortField === "code") {
+        const aNum = getCourseNumber(a.code);
+        const bNum = getCourseNumber(b.code);
+        return sortDirection === "asc" ? aNum - bNum : bNum - aNum;
       }
-      if (sortBy === "rating-desc") {
-        return (noratings === -2? b.rating - a.rating: noratings);
-      }
-      if (sortBy === "diff-asc") {
-        return (nodiff === -2? a.difficulty - b.difficulty: nodiff);
-      }
-      if (sortBy === "diff-desc") {
-        return (nodiff === -2? b.difficulty - a.difficulty: nodiff);
-      }
-      if (sortBy === "gpa-asc") {
-        return (nogpa === -2? a.avg_gpa - b.avg_gpa: nogpa);
-      }
-      if (sortBy === "gpa-desc") {
-        return (nogpa === -2? b.avg_gpa - a.avg_gpa: nogpa);
+      if (sortField === "credits") {
+        const aVal = typeof a.max_credits === "number" ? a.max_credits : (a.credits ?? 0);
+        const bVal = typeof b.max_credits === "number" ? b.max_credits : (b.credits ?? 0);
+        const diff = sortDirection === "asc" ? aVal - bVal : bVal - aVal;
+        if (diff !== 0) return diff;
+        const aHasRange = typeof a.max_credits === "number" ? 1 : 0;
+        const bHasRange = typeof b.max_credits === "number" ? 1 : 0;
+        return aHasRange - bHasRange; // fixed (0) before ranges (1)
       }
       if (!search.trim()) return 0;
       return scoreMatch(b, searchTerms) - scoreMatch(a, searchTerms);
     });
-
-  function toggleCourseLevel(level: number) {
-    const newLevels = new Set(courseLevels);
-    if (newLevels.has(level)) {
-      newLevels.delete(level);
-    } else {
-      newLevels.add(level);
-    }
-    setCourseLevels(newLevels);
-  }
-
-  function getLevelLabel(level: number): string {
-    if (level === 600) return "600+";
-    return `${level}`;
-  }
-
-  function buttonText(sort) {
-    let azButton;
-    let codeButton;
-    let ratingButton;
-    let diffButton;
-    let gpaButton;
-    if (sort === 'a-z' || sort === 'z-a'){
-      sort === 'a-z' ? azButton = 'A-Z ↑' : azButton = 'A-Z ↓'
-      return azButton;
-    }
-    if (sort === 'code-asc' || sort === 'code-desc'){
-      sort === 'code-asc' ? codeButton = 'Code ↑' : codeButton = 'Code ↓'
-      return codeButton;
-    }
-    if (sort === 'rating-asc' || sort === 'rating-desc'){
-      sort === 'rating-asc' ? ratingButton = 'Rating ↑' : ratingButton = 'Rating ↓'
-      return ratingButton;
-    }
-    if (sort === 'diff-asc' || sort === 'diff-desc'){
-      sort === 'diff-asc' ? diffButton = 'Difficulty ↑' : diffButton = 'Difficulty ↓'
-      return diffButton;
-    }
-    if (sort === 'gpa-asc' || sort === 'gpa-desc'){
-      sort === 'gpa-asc' ? gpaButton = 'Avg Grade ↑' : gpaButton = 'Avg Grade ↓'
-      return gpaButton;
-    }
-    return 
-  }
 
   return (
     <div className="min-h-full flex-1 bg-gray-50">
@@ -286,149 +237,202 @@ export default function CoursesPage() {
 
         <RequestCourseModal open={requestModalOpen} onClose={() => setRequestModalOpen(false)} />
 
-        <div className="flex flex-col sm:flex-row gap-3 mb-4 flex-wrap">
+        {/* Search Bar */}
+        <div className="mb-4">
           <input
             type="text"
             placeholder="Search by name, code, or professor..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="flex-1 min-w-48 border border-gray-300 rounded-lg px-4 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <select
-            value={college}
-            onChange={(e) => handleCollegeChange(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none"
-          >
-            <option value="">Select College</option>
-            {collegeOptions.map((col) => (
-              <option key={col} value={col}>{col}</option>
-            ))}
-          </select>
-          <select
-            value={department}
-            onChange={(e) => setDepartment(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none"
-          >
-            <option value="">Select Department</option>
-            {departmentOptions.map((dept) => (
-              <option key={dept} value={dept}>{dept}</option>
-            ))}
-          </select>
-        </div>
-
-        {/* Sort Controls */}
-        <div className="flex items-center gap-2 mb-4">
-          <span className="text-sm text-gray-500 font-medium">Sort:</span>
-          <button
-            onClick={() => {
-              setSortBy(sortBy === "a-z" ? "z-a" : "a-z");
-              lastSort = (sortBy === "a-z" ? "z-a" : "a-z");
-            }}
-            className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
-              (sortBy === "a-z" || sortBy === "z-a")
-                ? "bg-blue-600 text-white border-blue-600 hover:border-blue-400"
-                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
-            }`}
-          >
-            {sortBy === "a-z" || sortBy === "z-a"? buttonText(sortBy): 'A-Z'}
-          </button>
-          <button
-            onClick={() => {
-              setSortBy(sortBy === "code-asc" ? "code-desc" : "code-asc");
-              lastSort = (sortBy === "code-asc" ? "code-desc" : "code-asc")
-            }}
-            className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
-              (sortBy === "code-asc" || sortBy === "code-desc")
-                ? "bg-blue-600 text-white border-blue-600 hover:border-blue-400"
-                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
-            }`}
-          >
-            {sortBy === "code-asc" || sortBy === "code-desc"? buttonText(sortBy): 'Code'}
-          </button>
-          <button
-                  onClick={() => {
-                    setSortBy(sortBy === "rating-asc" ? "rating-desc" : "rating-asc");
-                    lastSort = (sortBy === "rating-asc" ? "rating-desc" : "rating-asc")
-                  }}
-                  className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
-                    (sortBy === "rating-asc" || sortBy === "rating-desc")
-                      ? "bg-blue-600 text-white border-blue-600 hover:border-blue-400"
-                      : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
-                  }`}
-                >
-                  {sortBy === "rating-asc" || sortBy === "rating-desc"? buttonText(sortBy): 'Rating'}
-                </button>
-                <button
-                  onClick={() => {
-                    setSortBy(sortBy === "diff-asc" ? "diff-desc" : "diff-asc");
-                    lastSort = (sortBy === "diff-asc" ? "diff-desc" : "diff-asc")
-                  }}
-                  className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
-                    (sortBy === "diff-asc" || sortBy === "diff-desc")
-                      ? "bg-blue-600 text-white border-blue-600 hover:border-blue-400"
-                      : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
-                  }`}
-                >
-                  {sortBy === "diff-asc" || sortBy === "diff-desc"? buttonText(sortBy): 'Difficulty'}
-                </button>
-                <button
-                  onClick={() => {
-                    setSortBy(sortBy === "gpa-asc" ? "gpa-desc" : "gpa-asc");
-                    lastSort = (sortBy === "gpa-asc" ? "gpa-desc" : "gpa-asc")
-                  }}
-                  className={`px-3 py-1.5 text-sm font-medium border rounded transition-colors ${
-                    (sortBy === "gpa-asc" || sortBy === "gpa-desc")
-                      ? "bg-blue-600 text-white border-blue-600 hover:border-blue-400"
-                      : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
-                  }`}
-                >
-                  {sortBy === "gpa-asc" || sortBy === "gpa-desc"? buttonText(sortBy): 'Avg Grade'}
-                </button>
-        </div>
-
-        {/* Course Level Filter Section */}
-        <div className="border-b border-gray-200 mb-4">
-          <button
-            onClick={() => setCourseLevelsOpen(!courseLevelsOpen)}
-            className="w-full flex justify-between items-center py-3 px-0 text-left font-semibold text-gray-800 hover:text-gray-600 transition-colors"
-          >
-            <span>Course Level</span>
-            <span className="text-xl">{courseLevelsOpen ? "−" : "+"}</span>
-          </button>
-          {courseLevelsOpen && (
-            <div className="pb-3 flex flex-wrap gap-2">
-              {availableCourseLevels.map((level) => (
-                <button
-                  key={level}
-                  onClick={() => toggleCourseLevel(level)}
-                  className={`px-3 py-2 text-sm font-medium border rounded transition-colors ${
-                    courseLevels.has(level)
-                      ? "bg-blue-600 text-white border-blue-600"
-                      : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
-                  }`}
-                >
-                  {getLevelLabel(level)}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <p className="text-sm text-gray-400 mb-4">
-          {loading ? "Loading..." : `${filteredCourses.length} course${filteredCourses.length !== 1 ? "s" : ""} found`}
-        </p>
-
-        <div className="flex flex-col gap-4">
-          {loading ? (
-            <p className="text-center text-gray-400 py-16">Loading courses...</p>
-          ) : filteredCourses.length === 0 ? (
-            <p className="text-center text-gray-400 py-16">No courses match your search.</p>
-          ) : (
-            filteredCourses.map((course) => (
-              <CourseSummaryCard key={course.id} course={course} />
-            ))
-          )}
         </div>
       </main>
+
+      {/* Main Layout: Left Sidebar + Right Content (Full Width) */}
+      <div className="flex">
+        {/* Left Sidebar Filters (Fixed to left) */}
+        <div className="w-64 flex-shrink-0 bg-gray-50 border-r border-gray-200 py-8 px-4 ml-8 h-screen overflow-y-auto pb-32">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">Filters</h3>
+
+              {/* College Listbox */}
+              <div className="mb-5">
+                <label className="block text-sm font-medium text-gray-700 mb-2">College</label>
+                <Listbox value={college} onChange={handleCollegeChange}>
+                  <ListboxButton className="w-full flex justify-between items-center py-2 px-3 text-left text-sm text-gray-900 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors data-open:bg-gray-50">
+                    {college || "All Colleges"}
+                    <span className="text-lg">▼</span>
+                  </ListboxButton>
+                  <ListboxOptions
+                    anchor="bottom"
+                    transition
+                    className="origin-top transition duration-200 ease-out data-closed:scale-95 data-closed:opacity-0 rounded-lg border border-gray-200 bg-white shadow-lg p-1 z-10"
+                  >
+                    <ListboxOption value="" className="px-3 py-2 text-sm text-gray-900 rounded transition-colors data-focus:bg-blue-50 cursor-pointer">
+                      All Colleges
+                    </ListboxOption>
+                    {collegeOptions.map((col) => (
+                      <ListboxOption key={col} value={col} className="px-3 py-2 text-sm text-gray-900 rounded transition-colors data-focus:bg-blue-50 cursor-pointer">
+                        {col}
+                      </ListboxOption>
+                    ))}
+                  </ListboxOptions>
+                </Listbox>
+              </div>
+
+              {/* Department Listbox */}
+              <div className="mb-5">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Department</label>
+                <Listbox value={department} onChange={setDepartment}>
+                  <ListboxButton className="w-full flex justify-between items-center py-2 px-3 text-left text-sm text-gray-900 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors data-open:bg-gray-50">
+                    {department || "All Departments"}
+                    <span className="text-lg">▼</span>
+                  </ListboxButton>
+                  <ListboxOptions
+                    anchor="bottom"
+                    transition
+                    className="origin-top transition duration-200 ease-out data-closed:scale-95 data-closed:opacity-0 rounded-lg border border-gray-200 bg-white shadow-lg p-1 z-10"
+                  >
+                    <ListboxOption value="" className="px-3 py-2 text-sm text-gray-900 rounded transition-colors data-focus:bg-blue-50 cursor-pointer">
+                      All Departments
+                    </ListboxOption>
+                    {departmentOptions.map((dept) => (
+                      <ListboxOption key={dept} value={dept} className="px-3 py-2 text-sm text-gray-900 rounded transition-colors data-focus:bg-blue-50 cursor-pointer">
+                        {dept}
+                      </ListboxOption>
+                    ))}
+                  </ListboxOptions>
+                </Listbox>
+              </div>
+
+              {/* Sort Field + Direction */}
+              <div className="border-t border-gray-200 pt-4 mb-4 space-y-3">
+                <Listbox value={sortField} onChange={setSortField}>
+                  <ListboxButton className="w-full flex justify-between items-center py-2 px-3 text-left text-sm text-gray-900 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors data-open:bg-gray-50">
+                    {sortField ? (sortField === "code" ? "Code" : "Credits") : "Sort by..."}
+                    <span className="text-lg">▼</span>
+                  </ListboxButton>
+                  <ListboxOptions
+                    anchor="bottom"
+                    transition
+                    className="origin-top transition duration-200 ease-out data-closed:scale-95 data-closed:opacity-0 rounded-lg border border-gray-200 bg-white shadow-lg p-1 z-10"
+                  >
+                    <ListboxOption value="" className="px-3 py-2 text-sm text-gray-900 rounded transition-colors data-focus:bg-blue-50 cursor-pointer">
+                      None
+                    </ListboxOption>
+                    <ListboxOption value="code" className="px-3 py-2 text-sm text-gray-900 rounded transition-colors data-focus:bg-blue-50 cursor-pointer">
+                      Code
+                    </ListboxOption>
+                    <ListboxOption value="credits" className="px-3 py-2 text-sm text-gray-900 rounded transition-colors data-focus:bg-blue-50 cursor-pointer">
+                      Credits
+                    </ListboxOption>
+                  </ListboxOptions>
+                </Listbox>
+
+                {sortField && (
+                  <Listbox value={sortDirection} onChange={setSortDirection}>
+                    <ListboxButton className="w-full flex justify-between items-center py-2 px-3 text-left text-sm text-gray-900 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors data-open:bg-gray-50">
+                      {sortDirection === "asc" ? "↑ Ascending" : "↓ Descending"}
+                      <span className="text-lg">▼</span>
+                    </ListboxButton>
+                    <ListboxOptions
+                      anchor="bottom"
+                      transition
+                      className="origin-top transition duration-200 ease-out data-closed:scale-95 data-closed:opacity-0 rounded-lg border border-gray-200 bg-white shadow-lg p-1 z-10"
+                    >
+                      <ListboxOption value="asc" className="px-3 py-2 text-sm text-gray-900 rounded transition-colors data-focus:bg-blue-50 cursor-pointer">
+                        ↑ Ascending
+                      </ListboxOption>
+                      <ListboxOption value="desc" className="px-3 py-2 text-sm text-gray-900 rounded transition-colors data-focus:bg-blue-50 cursor-pointer">
+                        ↓ Descending
+                      </ListboxOption>
+                    </ListboxOptions>
+                  </Listbox>
+                )}
+              </div>
+
+              {/* Credits Range Slider */}
+              <div className="border-t border-gray-200 pt-4 mb-4 relative">
+                <Listbox value="" onChange={() => {}}>
+                  <ListboxButton className="w-full flex justify-between items-center py-3 px-3 text-left font-semibold text-gray-800 hover:bg-gray-100 rounded-lg transition-colors data-open:bg-gray-100">
+                    <span className="text-sm">Credits: {creditsRange[0]}-{creditsRange[1] === 6 ? "6+" : creditsRange[1]}</span>
+                    <span className="text-lg">▼</span>
+                  </ListboxButton>
+                  <ListboxOptions
+                    anchor="bottom"
+                    transition
+                    className="origin-top transition duration-200 ease-out data-closed:scale-95 data-closed:opacity-0 rounded-lg border border-gray-200 bg-white shadow-lg p-4 z-10"
+                  >
+                    <div className="pointer-events-auto w-48">
+                      <div className="text-sm text-gray-600 text-center font-medium mb-3">
+                        {creditsRange[0]} - {creditsRange[1] === 6 ? "6+" : creditsRange[1]}
+                      </div>
+                      <Slider
+                        value={creditsRange}
+                        onValueChange={(v) => setCreditsRange([v[0], v[1]])}
+                        min={1}
+                        max={6}
+                        step={1}
+                        minStepsBetweenThumbs={0}
+                      />
+                    </div>
+                  </ListboxOptions>
+                </Listbox>
+              </div>
+
+              {/* Course Level Range Slider */}
+              <div className="border-t border-gray-200 pt-4 relative">
+                <Listbox value="" onChange={() => {}}>
+                  <ListboxButton className="w-full flex justify-between items-center py-3 px-3 text-left font-semibold text-gray-800 hover:bg-gray-100 rounded-lg transition-colors data-open:bg-gray-100">
+                    <span className="text-sm">Level: {courseLevelRange[0]}-{courseLevelRange[1] === 600 ? "600+" : courseLevelRange[1]}</span>
+                    <span className="text-lg">▼</span>
+                  </ListboxButton>
+                  <ListboxOptions
+                    anchor="bottom"
+                    transition
+                    className="origin-top transition duration-200 ease-out data-closed:scale-95 data-closed:opacity-0 rounded-lg border border-gray-200 bg-white shadow-lg p-4 z-10"
+                  >
+                    <div className="pointer-events-auto w-48">
+                      <div className="text-sm text-gray-600 text-center font-medium mb-3">
+                        {courseLevelRange[0]} - {courseLevelRange[1] === 600 ? "600+" : courseLevelRange[1]}
+                      </div>
+                      <Slider
+                        value={courseLevelRange}
+                        onValueChange={(v) => setCourseLevelRange([v[0], v[1]])}
+                        min={100}
+                        max={600}
+                        step={100}
+                        minStepsBetweenThumbs={0}
+                      />
+                    </div>
+                  </ListboxOptions>
+                </Listbox>
+              </div>
+            </div>
+          </div>
+
+        {/* Right Content: Course List */}
+        <div className="flex-1 mx-auto max-w-4xl px-4 py-8">
+            <p className="text-sm text-gray-400 mb-4">
+              {loading ? "Loading..." : `${filteredCourses.length} course${filteredCourses.length !== 1 ? "s" : ""} found`}
+            </p>
+
+            <div className="flex flex-col gap-4">
+              {loading ? (
+                <p className="text-center text-gray-400 py-16">Loading courses...</p>
+              ) : filteredCourses.length === 0 ? (
+                <p className="text-center text-gray-400 py-16">No courses match your search.</p>
+              ) : (
+                filteredCourses.map((course) => (
+                  <CourseSummaryCard key={course.id} course={course} />
+                ))
+              )}
+            </div>
+        </div>
+      </div>
     </div>
   );
 }
+
+

@@ -41,17 +41,20 @@ CREATE OR REPLACE VIEW course_metrics AS
         WHERE sc.subject = cl.subject
         ORDER BY col.name
         LIMIT 1
-    ) AS college
+    ) AS college,
+    -- Include credits from classes (NULL when unknown) — appended at end to preserve column positions
+    cl.credits AS credits,
+    cl.max_credits AS max_credits
    FROM classes cl
      LEFT JOIN professor_classes pc ON pc.class_id = cl.id
      LEFT JOIN professor p ON p.id = pc.prof_id
      LEFT JOIN course_evaluations e ON e.course_id = cl.id
-  GROUP BY cl.id, cl.course_number, cl.name, cl.subject, cl.description;
+    GROUP BY cl.id, cl.course_number, cl.name, cl.subject, cl.description, cl.credits, cl.max_credits;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Verify: sample a few rows to confirm college is populated
 -- ─────────────────────────────────────────────────────────────────────────────
-SELECT department, college, code
+SELECT department, college, code, credits,max_credits
 FROM course_metrics
 WHERE department IN ('COMPSCI', 'ACCOUNTG', 'PHYSICS', 'NURSING', 'EDUC')
 ORDER BY department, code
