@@ -1,5 +1,6 @@
 "use client";
 import { supabase } from "@/lib/supabase/client";
+import { isAdmin } from "@/lib/admins";
 import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -39,6 +40,11 @@ export default function SiteHeader() {
           {session ? (
             <>
             <Link href="/profile" className="text-blue-600 hover:text-blue-800">Profile</Link>
+            {isAdmin(session.user.email) && (
+              <Link href="/admin" className="text-blue-600 hover:text-blue-800 font-semibold">
+                Admin
+              </Link>
+            )}
             <button onClick={handleSignOut} className="text-blue-600 hover:text-blue-800">
               Sign out
             </button>
